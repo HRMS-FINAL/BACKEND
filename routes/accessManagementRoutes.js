@@ -1,0 +1,83 @@
+// routes/accessManagementRoutes.js — Access Management (formerly Role)
+const express    = require('express');
+const router     = express.Router();
+const AccessRole = require('../models/AccessRole');
+
+const MODULES = ['dashboard', 'employees', 'payroll', 'attendance', 'performance', 'settings', 'live_tracking'];
+const defaultPermissions = () =>
+  Object.fromEntries(MODULES.map(m => [m, { view: false, create: false, edit: false, delete: false }]));
+
+// GET /api/access-management — all active access roles
+router.get('/', async (req, res) => {
+  try {
+    const roles = await AccessRole.find({ isActive: true }).sort({ createdAt: 1 });
+    res.status(200).json({ success: true, data: roles });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET /api/access-management/:id
+router.get('/:id', async (req, res) => {
+  try {
+    const role = await AccessRole.findById(req.params.id);
+    if (!role) return res.status(404).json({ success: false, message: 'Access role not found' });
+    res.status(200).json({ success: true, data: role });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/access-management — create new role
+router.post('/', async (req, res) => {
+  try {
+    const { name, description, color } = req.body;
+    if (!name) return res.status(400).json({ success: false, message: 'Role name is required' });
+    const role = await AccessRole.create({
+      name: name.trim(),
+      description: description || '',
+      color: color || '#4CAA17',
+      permissions: defaultPermissions(),
+    });
+    res.status(201).json({ success: true, data: role, message: `Access role "${name}" created successfully` });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// PUT /api/access-management/:id — update name/description/color
+router.put('/:id', async (req, res) => {
+  try {
+    const role = await AccessRole.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    if (!role) return res.status(404).json({ success: false, message: 'Access role not found' });
+    res.status(200).json({ success: true, data: role, message: 'Access role updated successfully' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// PUT /api/access-management/:id/permissions — update permission matrix
+router.put('/:id/permissions', async (req, res) => {
+  try {
+    const { permissions } = req.body;
+    if (!permissions) return res.status(400).json({ success: false, message: 'Permissions object is required' });
+    const role = await AccessRole.findByIdAndUpdate(req.params.id, { permissions }, { new: true, runValidators: true });
+    if (!role) return res.status(404).json({ success: false, message: 'Access role not found' });
+    res.status(200).json({ success: true, data: role, message: 'Permissions updated successfully' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// DELETE /api/access-management/:id — soft delete
+router.delete('/:id', async (req, res) => {
+  try {
+    const role = await AccessRole.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
+    if (!role) return res.status(404).json({ success: false, message: 'Access role not found' });
+    res.status(200).json({ success: true, message: `Access role "${role.name}" deleted successfully` });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+module.exports = router;
