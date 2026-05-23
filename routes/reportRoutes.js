@@ -1,4 +1,4 @@
-// routes/reportRoutes.js — Attendance report with all employees
+// routes/reportRoutes.js — Attendance report (only employees with actual logs)
 const express      = require('express');
 const router       = express.Router();
 const Attendance   = require('../models/Attendance');
@@ -33,39 +33,37 @@ router.get('/attendance', async (req, res) => {
     const getDept  = v => !v ? '—' : (isObjId(v) ? (deptMap[String(v)]  || '—') : String(v));
     const getDesig = v => !v ? '—' : (isObjId(v) ? (desigMap[String(v)] || '—') : String(v));
 
-    // Pre-seed ALL employees — everyone appears in the report
-    const grouped      = {};
+    // Build lookup maps for employees
     const empByEmpId   = {};
     const empByMongoId = {};
-
     employees.forEach(e => {
-      const key      = e.employeeId || String(e._id);
-      const fullName = e.name || `${e.firstName || ''} ${e.lastName || ''}`.trim() || 'Unknown';
-      const initials = fullName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
-      grouped[key] = {
-        employeeId:   e.employeeId || '',
-        employeeName: fullName,
-        avatar:       initials,
-        color:        e.color || COLORS[fullName.charCodeAt(0) % COLORS.length],
-        empDoc:       e,
-        present: 0, late: 0, absent: 0, halfDay: 0, leavedays: 0,
-      };
       if (e.employeeId) empByEmpId[String(e.employeeId)] = e;
       empByMongoId[String(e._id)] = e;
     });
 
-    // Overlay attendance logs
+    // Only include employees who have attendance logs in the date range
+    const grouped = {};
+
     logs.forEach(log => {
-      let key = log.employeeId && grouped[log.employeeId] ? log.employeeId : null;
-      if (!key && log.employee) {
-        const emp = empByMongoId[String(log.employee)];
-        if (emp) key = emp.employeeId || String(emp._id);
+      // Find matching employee record
+      let empDoc = null;
+      if (log.employeeId) empDoc = empByEmpId[String(log.employeeId)] || null;
+      if (!empDoc && log.employee) empDoc = empByMongoId[String(log.employee)] || null;
+
+      const key      = log.employeeId || log.employeeName || String(log._id);
+      const fullName = log.employeeName || (empDoc ? (empDoc.name || `${empDoc.firstName || ''} ${empDoc.lastName || ''}`.trim()) : 'Unknown');
+      const initials = fullName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+
+      if (!grouped[key]) {
+        grouped[key] = {
+          employeeId:   log.employeeId || empDoc?.employeeId || '',
+          employeeName: fullName,
+          avatar:       log.avatar || initials,
+          color:        log.color  || empDoc?.color || COLORS[fullName.charCodeAt(0) % COLORS.length],
+          empDoc:       empDoc,
+          present: 0, late: 0, absent: 0, halfDay: 0, leavedays: 0,
+        };
       }
-      if (!key) {
-        key = log.employeeId || log.employeeName;
-        if (key && !grouped[key]) grouped[key] = { employeeId: log.employeeId || '', employeeName: log.employeeName || '', avatar: '', color: '#4299E1', empDoc: null, present: 0, late: 0, absent: 0, halfDay: 0, leavedays: 0 };
-      }
-      if (!key || !grouped[key]) return;
       const g = grouped[key];
       if      (log.status === 'On Time')  g.present++;
       else if (log.status === 'Late')     g.late++;
@@ -73,7 +71,7 @@ router.get('/attendance', async (req, res) => {
       else if (log.status === 'Half Day') g.halfDay++;
     });
 
-    // Overlay approved leave days
+    // Overlay approved leave days (only for employees already in grouped)
     leaveReqs.forEach(lr => {
       let key = lr.employeeId && grouped[lr.employeeId] ? lr.employeeId : null;
       if (!key && lr.employee) { const emp = empByMongoId[String(lr.employee)]; if (emp) key = emp.employeeId || String(emp._id); }

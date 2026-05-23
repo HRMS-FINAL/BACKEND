@@ -26,10 +26,10 @@ const loadLookupMaps = async () => {
   const deptMap  = Object.fromEntries(depts.map(d  => [String(d._id), d]));
   const desigMap = Object.fromEntries(desigs.map(d => [String(d._id), d]));
   const roleMap  = Object.fromEntries(roles.map(r  => [String(r._id), r]));
-  return { deptMap, desigMap, roleMap };
+  return { deptMap, desigMap, roleMap, depts, desigs };
 };
 
-// ── GET /api/employees — list with pagination & search ─────────
+// ── GET /api/employees ──────────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
     const page   = Math.max(1, parseInt(req.query.page)   || 1);
@@ -90,23 +90,57 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const b = req.body;
+
+    // Resolve department: accept ObjectId OR name string
+    let deptId = null;
+    if (b.department) {
+      if (isObjectId(b.department)) {
+        deptId = b.department;
+      } else {
+        const dept = await Department.findOne({ name: { $regex: new RegExp(`^${b.department}$`, 'i') } }).lean();
+        deptId = dept ? dept._id : null;
+        // If department name not found in DB, create it on the fly
+        if (!deptId) {
+          const newDept = await Department.create({ name: b.department });
+          deptId = newDept._id;
+        }
+      }
+    }
+
+    // Resolve designation: accept ObjectId OR title string
+    let desigId = null;
+    if (b.designation) {
+      if (isObjectId(b.designation)) {
+        desigId = b.designation;
+      } else {
+        const desig = await Designation.findOne({ title: { $regex: new RegExp(`^${b.designation}$`, 'i') } }).lean();
+        desigId = desig ? desig._id : null;
+        // If designation not found, create it on the fly
+        if (!desigId) {
+          const newDesig = await Designation.create({ title: b.designation, dept: b.department || 'General' });
+          desigId = newDesig._id;
+        }
+      }
+    }
+
     const payload = {
       firstName:      b.firstName,
       lastName:       b.lastName,
       username:       b.username,
-      password:       b.password,
+      password:       b.password || 'password123',
       email:          b.email,
       phone:          b.phone,
-      address:        b.address || { street: b.street, city: b.city, state: b.state, zipCode: b.zipCode, country: b.country },
+      address:        b.address || { street: b.street || '', city: b.city || '', state: b.state || '', zipCode: b.zipCode || '', country: b.country || '' },
       employeeId:     b.employeeId,
-      department:     b.department,
-      designation:    b.designation   || null,
+      department:     deptId,
+      designation:    desigId,
       employmentType: b.employmentType || '',
       joiningDate:    b.joiningDate,
       salary:         Number(b.salary) || 0,
       assignedTo:     b.assignedTo,
-      education:      b.education || { degree: b.degree, university: b.university, fieldOfStudy: b.fieldOfStudy, graduationYear: Number(b.graduationYear) },
+      education:      b.education || { degree: b.degree || '', university: b.university || '', fieldOfStudy: b.fieldOfStudy || '', graduationYear: Number(b.graduationYear) || 2020 },
       status:         b.status || 'Active',
+      isActive:       true,
     };
 
     const employee = await Employee.create(payload);
@@ -114,10 +148,10 @@ router.post('/', async (req, res) => {
     return res.status(201).json({ success: true, message: 'Employee created successfully', data: employee.toSafeObject() });
   } catch (err) {
     console.error('[EMPLOYEE] Create error:', err.message);
-    if (err.name === 'ValidationError') return res.status(400).json({ success: false, message: 'Validation failed', errors: err.errors });
+    if (err.name === 'ValidationError') return res.status(400).json({ success: false, message: 'Validation failed: ' + Object.values(err.errors).map(e => e.message).join(', ') });
     if (err.code === 11000) {
       const field = Object.keys(err.keyPattern || {})[0] || 'field';
-      return res.status(400).json({ success: false, message: `${field} already exists` });
+      return res.status(400).json({ success: false, message: `${field} already exists. Please use a different value.` });
     }
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -127,10 +161,10 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const payload = { ...req.body };
-    delete payload.password; // password change via separate route
+    delete payload.password;
     Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
 
-    const employee = await Employee.findByIdAndUpdate(req.params.id, payload, { new: true, runValidators: true });
+    const employee = await Employee.findByIdAndUpdate(req.params.id, payload, { new: true, runValidators: false });
     if (!employee) return res.status(404).json({ success: false, message: 'Employee not found' });
     return res.status(200).json({ success: true, message: 'Employee updated successfully', employee: employee.toSafeObject() });
   } catch (err) {
