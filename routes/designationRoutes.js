@@ -2,14 +2,37 @@
 const express     = require('express');
 const router      = express.Router();
 const Designation = require('../models/Designation');
+const Employee    = require('../models/Employee');
 
 const COLORS = ['#4299E1','#9F7AEA','#4CAA17','#ECC94B','#F687B3','#ED8936','#38B2AC','#FC8181'];
 
-// GET /api/designations — all active designations
+// GET /api/designations — all active designations + LIVE employee count
 router.get('/', async (req, res) => {
   try {
-    const designations = await Designation.find({ isActive: true }).sort({ createdAt: -1 });
-    res.status(200).json({ success: true, data: designations });
+    const designations = await Designation.find({ isActive: true }).sort({ createdAt: -1 }).lean();
+
+    // Bucket employees by designation. Same dual-key dance as departments
+    // (ObjectId vs free-text designation).
+    const by = await Employee.aggregate([
+      { $match: { isActive: { $ne: false } } },
+      { $group: { _id: '$designation', count: { $sum: 1 } } },
+    ]);
+    const countById    = {};
+    const countByTitle = {};
+    by.forEach(r => {
+      const k = String(r._id || '');
+      if (/^[a-f0-9]{24}$/i.test(k)) countById[k] = r.count;
+      else                            countByTitle[k.toLowerCase()] = r.count;
+    });
+
+    const enriched = designations.map(d => ({
+      ...d,
+      employeeCount:
+        (countById[String(d._id)] || 0) +
+        (countByTitle[String(d.title || '').toLowerCase()] || 0),
+    }));
+
+    res.status(200).json({ success: true, data: enriched });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

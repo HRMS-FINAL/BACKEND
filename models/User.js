@@ -13,6 +13,9 @@ const userSchema = new mongoose.Schema(
     lastLogin:{ type: Date, default: null },
     resetPasswordToken:  { type: String,  select: false },
     resetPasswordExpire: { type: Date,    select: false },
+    // 6-digit OTP for forgot-password. Cleared after successful reset.
+    otp:        { type: String, select: false },
+    otpExpires: { type: Date,   select: false },
   },
   { timestamps: true }
 );
@@ -31,6 +34,14 @@ userSchema.methods.toSafeObject = function () {
   const obj = this.toObject();
   delete obj.password;
   delete obj.__v;
+  // Stamp `isAdmin` so the React app can hide / disable Save / Delete
+  // buttons for non-admin sign-ins (view-only mode).
+  try {
+    const { isAdminEmail } = require('../middleware/authMiddleware');
+    obj.isAdmin = isAdminEmail(this.email);
+  } catch {
+    obj.isAdmin = false;
+  }
   return obj;
 };
 

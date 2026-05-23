@@ -1,4 +1,4 @@
-// routes/reportRoutes.js — Attendance report (only employees with actual logs)
+// routes/reportRoutes.js — Attendance report (mobile backend as source of truth)
 const express      = require('express');
 const router       = express.Router();
 const Attendance   = require('../models/Attendance');
@@ -10,6 +10,58 @@ const Designation  = require('../models/Designation');
 const COLORS = ['#4CAA17','#9F7AEA','#4299E1','#ECC94B','#FC8181','#48BB78','#ED64A6','#667EEA'];
 const isObjId  = v => v && /^[a-f0-9]{24}$/i.test(String(v));
 
+const MOBILE_API   = (process.env.MOBILE_API_URL    || 'https://backend-emqy.onrender.com').replace(/\/+$/, '');
+const ADMIN_SECRET =  process.env.MOBILE_ADMIN_SECRET || '';
+const FETCH_TIMEOUT_MS = 45_000;
+
+async function fwdMobile(path) {
+  if (typeof fetch !== 'function') {
+    throw new Error('global fetch is not available — Node 18+ required.');
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(MOBILE_API + path, {
+      signal:  controller.signal,
+      headers: { 'x-admin-secret': ADMIN_SECRET },
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Fetch every attendance row in [startDate, endDate] from the mobile backend,
+ * spanning month boundaries if necessary. Returns an array of raw mobile docs
+ * each with { user (populated), date, checkIn, checkOut, status, ... }.
+ */
+async function fetchMobileAttendanceRange(startDate, endDate) {
+  if (!ADMIN_SECRET) return [];
+  const start = new Date(startDate);
+  const end   = new Date(endDate);
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) return [];
+
+  const months = new Set();
+  for (let d = new Date(start.getFullYear(), start.getMonth(), 1);
+       d <= end;
+       d.setMonth(d.getMonth() + 1)) {
+    months.add(`${d.getFullYear()}-${d.getMonth() + 1}`);
+  }
+
+  const all = [];
+  for (const key of months) {
+    const [y, m] = key.split('-');
+    const r = await fwdMobile(`/api/attendance/admin/all?month=${m}&year=${y}&limit=5000`);
+    if (!r.ok) continue;
+    const j = await r.json().catch(() => ({}));
+    (j.items || []).forEach(it => {
+      // date is "YYYY-MM-DD"; keep rows inside the requested window.
+      if (it.date >= startDate && it.date <= endDate) all.push(it);
+    });
+  }
+  return all;
+}
+
 // GET /api/reports/attendance?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
 router.get('/attendance', async (req, res) => {
   try {
@@ -18,10 +70,11 @@ router.get('/attendance', async (req, res) => {
       return res.status(400).json({ success: false, message: 'startDate and endDate are required (YYYY-MM-DD)' });
     }
 
-    // Fetch all data in parallel
-    const [logs, leaveReqs, employees, depts, desigs] = await Promise.all([
-      Attendance.find({ isActive: true, date: { $gte: startDate, $lte: endDate } }),
-      LeaveRequest.find({ isActive: true, status: 'Approved', fromDate: { $lte: endDate }, toDate: { $gte: startDate } }),
+    // Pull data in parallel.
+    const [mobileLogs, localLogs, leaveReqs, employees, depts, desigs] = await Promise.all([
+      fetchMobileAttendanceRange(startDate, endDate),
+      Attendance.find({ isActive: true, date: { $gte: startDate, $lte: endDate } }).lean().catch(() => []),
+      LeaveRequest.find({ isActive: true, status: 'Approved', fromDate: { $lte: endDate }, toDate: { $gte: startDate } }).lean().catch(() => []),
       Employee.find({ isActive: { $ne: false } }).lean(),
       Department.find({}).lean(),
       Designation.find({}).lean(),
@@ -29,11 +82,10 @@ router.get('/attendance', async (req, res) => {
 
     const deptMap  = Object.fromEntries(depts.map(d  => [String(d._id), d.name]));
     const desigMap = Object.fromEntries(desigs.map(d => [String(d._id), d.title]));
-
     const getDept  = v => !v ? '—' : (isObjId(v) ? (deptMap[String(v)]  || '—') : String(v));
     const getDesig = v => !v ? '—' : (isObjId(v) ? (desigMap[String(v)] || '—') : String(v));
 
-    // Build lookup maps for employees
+    // Employee lookup maps (by employeeId and by Mongo _id, both shared).
     const empByEmpId   = {};
     const empByMongoId = {};
     employees.forEach(e => {
@@ -41,29 +93,56 @@ router.get('/attendance', async (req, res) => {
       empByMongoId[String(e._id)] = e;
     });
 
-    // Only include employees who have attendance logs in the date range
-    const grouped = {};
+    const grouped = {}; // keyed by employeeId or fallback
 
-    logs.forEach(log => {
-      // Find matching employee record
-      let empDoc = null;
-      if (log.employeeId) empDoc = empByEmpId[String(log.employeeId)] || null;
-      if (!empDoc && log.employee) empDoc = empByMongoId[String(log.employee)] || null;
-
-      const key      = log.employeeId || log.employeeName || String(log._id);
-      const fullName = log.employeeName || (empDoc ? (empDoc.name || `${empDoc.firstName || ''} ${empDoc.lastName || ''}`.trim()) : 'Unknown');
-      const initials = fullName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+    // ── Aggregate mobile attendance ──────────────────────────────
+    mobileLogs.forEach(log => {
+      const fullName =
+        log.user?.name ||
+        [log.user?.firstName, log.user?.lastName].filter(Boolean).join(' ') ||
+        'Unknown';
+      const empId = log.user?.employeeId || '';
+      const empDoc =
+        (empId && empByEmpId[String(empId)]) ||
+        (log.user?._id && empByMongoId[String(log.user._id)]) ||
+        null;
+      const key = empId || (log.user?._id ? String(log.user._id) : fullName);
 
       if (!grouped[key]) {
+        const initials = fullName.split(' ').filter(Boolean).map(n => n[0]).join('').toUpperCase().slice(0, 2);
         grouped[key] = {
-          employeeId:   log.employeeId || empDoc?.employeeId || '',
+          employeeId:   empId || empDoc?.employeeId || '',
           employeeName: fullName,
-          avatar:       log.avatar || initials,
-          color:        log.color  || empDoc?.color || COLORS[fullName.charCodeAt(0) % COLORS.length],
+          avatar:       initials || '??',
+          color:        empDoc?.color || COLORS[(fullName.charCodeAt(0) || 0) % COLORS.length],
           empDoc:       empDoc,
           present: 0, late: 0, absent: 0, halfDay: 0, leavedays: 0,
         };
       }
+      const g = grouped[key];
+      const s = String(log.status || '').toLowerCase();
+      if      (s === 'present')    g.present++;
+      else if (s === 'late')       g.late++;
+      else if (s === 'absent')     g.absent++;
+      else if (s === 'leave')      g.absent++; // counted via overlay too, but absent is the raw bucket
+      else if (s === 'permission' || s === 'halfday') g.halfDay++;
+    });
+
+    // ── Merge any legacy local-DB logs (only if mobile didn't already cover) ──
+    localLogs.forEach(log => {
+      const key = log.employeeId || log.employeeName || String(log._id);
+      if (grouped[key]) return;
+      const fullName = log.employeeName || 'Unknown';
+      const empDoc = (log.employeeId && empByEmpId[String(log.employeeId)]) || null;
+      const initials = fullName.split(' ').filter(Boolean).map(n => n[0]).join('').toUpperCase().slice(0, 2);
+      grouped[key] = {
+        employeeId:   log.employeeId || empDoc?.employeeId || '',
+        employeeName: fullName,
+        avatar:       log.avatar || initials,
+        color:        log.color  || empDoc?.color || COLORS[(fullName.charCodeAt(0) || 0) % COLORS.length],
+        empDoc:       empDoc,
+        present: 0, late: 0, absent: 0, halfDay: 0, leavedays: 0,
+      };
       const g = grouped[key];
       if      (log.status === 'On Time')  g.present++;
       else if (log.status === 'Late')     g.late++;

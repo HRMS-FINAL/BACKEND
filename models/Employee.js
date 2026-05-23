@@ -37,6 +37,12 @@ const employeeSchema = new mongoose.Schema(
     employeeId:     { type: String, unique: true, sparse: true, trim: true, uppercase: true },
     department:     { type: mongoose.Schema.Types.ObjectId, ref: 'Department', required: [true, 'Department is required'] },
     designation:    { type: mongoose.Schema.Types.ObjectId, ref: 'Designation', default: null },
+    // Denormalised readable copies of the dept/designation, written
+    // alongside the ObjectId references so the saved document shows the
+    // actual name/title the admin selected (no need to JOIN to read it).
+    // Kept in sync by the create/update routes.
+    departmentName:   { type: String, default: '', trim: true },
+    designationTitle: { type: String, default: '', trim: true },
     employmentType: { type: String, enum: ['Full-time', 'Part-time', 'Contract', 'Intern', ''], default: '' },
     joiningDate:    { type: Date, required: [true, 'Joining date is required'] },
     salary:         { type: Number, required: [true, 'Salary is required'], min: 0 },
@@ -46,6 +52,10 @@ const employeeSchema = new mongoose.Schema(
     isActive:       { type: Boolean, default: true },
     accessRole:     { type: mongoose.Schema.Types.ObjectId, ref: 'AccessRole', default: null },
     createdBy:      { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    // Personal info shared with the mobile ERM app (same collection).
+    dob:            { type: String, default: '', trim: true },   // ISO date string
+    gender:         { type: String, default: '', trim: true },
+    bloodGroup:     { type: String, default: '', trim: true },
   },
   { timestamps: true }
 );
