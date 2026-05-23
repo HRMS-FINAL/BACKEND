@@ -40,7 +40,9 @@ router.post('/logs', async (req, res) => {
     if (!employeeId || !employeeName || !date) {
       return res.status(400).json({ success: false, message: 'employeeId, employeeName and date are required' });
     }
-    const log = await Attendance.create({ employeeId, employeeName, avatar, color, date, checkIn, checkOut, workHours, status });
+    // Normalize date to YYYY-MM-DD with leading zeros (e.g. "2026-05-5" → "2026-05-05")
+    const normalizedDate = new Date(date).toISOString().split('T')[0];
+    const log = await Attendance.create({ employeeId, employeeName, avatar, color, date: normalizedDate, checkIn, checkOut, workHours, status });
     res.status(201).json({ success: true, data: log, message: 'Attendance log created' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
