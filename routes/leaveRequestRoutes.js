@@ -66,9 +66,10 @@ function titleCaseStatus(s) {
  * shape used by LeavePermissionRequest.jsx.
  *
  * Notes:
- *   - The mobile backend has no "manager" tier — we set managerStatus to
- *     'Approved' so HR can act on the request directly. If you later add a
- *     manager step on the mobile side, swap this for the real value.
+ *   - The mobile backend has no "manager" tier — managerStatus comes back
+ *     EMPTY so the HRMS UI shows Approve/Reject buttons in the Manager
+ *     Status column. HR (acting as Manager) ticks one, which gates
+ *     whether the Status column's HR Approve/Reject buttons appear.
  *   - 'role' uses designation; 'dept' falls back to 'Mobile' since the
  *     mobile User schema doesn't store department.
  */
@@ -137,7 +138,17 @@ function reshape(d) {
     date:          dateStr,
     requestedAt:   fmtDateTime(d.createdAt),
     status:        titleCaseStatus(d.status),          // Pending / Approved / Rejected
-    managerStatus: 'Approved',                          // no manager tier on mobile
+    // Empty string by default. Frontend's Manager Status column treats
+    // anything other than 'Approved' / 'Rejected' as "not yet acted on"
+    // and renders Approve + Reject buttons. titleCaseStatus would have
+    // normalised empty → 'Pending' which would *look* like an active
+    // value to the frontend, so we map by hand:
+    managerStatus: (() => {
+      const m = String(d.managerStatus || '').trim().toLowerCase();
+      if (m === 'approved') return 'Approved';
+      if (m === 'rejected') return 'Rejected';
+      return '';                                        // → Approve/Reject buttons show
+    })(),
     avatar:        initialsFrom(name),
     color:         colorFor(seed),
     reason:        d.reason || '',
