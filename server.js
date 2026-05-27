@@ -13,52 +13,65 @@ const { seedCompanyData }   = require('./migrations/seedCompanyData');
 
 const app = express();
 
-// ─── CORS ────────────────────────────────────────────────────────────
-// `origin: true` reflects whichever origin made the request back in the
-// Access-Control-Allow-Origin header. With `credentials: true` we can
-// safely use cookies / auth headers across origins. We explicitly list
-// the custom headers our frontend sends so the browser's preflight
-// never rejects them.
+// ─── CORS — manual middleware ────────────────────────────────────────
+// Earlier versions used `app.use(cors())` from the `cors` npm package,
+// but on Render's edge a tiny subset of OPTIONS preflight requests were
+// landing in the 404 handler before the package's middleware finished
+// attaching headers. Result: browsers saw "No 'Access-Control-Allow-
+// Origin' header" and blocked every request from the Vercel frontend.
+//
+// This manual implementation is bulletproof because:
+//   1. It sets the headers as the very FIRST thing on every request,
+//      before any other middleware can run or fail.
+//   2. It short-circuits OPTIONS preflight with a 204 immediately, so
+//      Express never routes preflights through the rest of the stack.
+//   3. It echoes the actual Origin header back (required for
+//      credentials: true — wildcard `*` is forbidden when credentials
+//      are sent).
 //
 // Optional tightening: set CORS_ORIGINS=https://a.com,https://b.com on
-// Render to restrict to those origins. If unset, every origin is
-// allowed — fine for now while you're shipping.
+// the Render env to restrict to specific origins. If unset, every
+// origin is reflected (open mode, fine while you're shipping).
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
-  .map(s => s.trim())
+  .map(s => s.trim().replace(/\/+$/, ''))   // tolerate trailing slashes in the env var
   .filter(Boolean);
 
-const corsMiddleware = cors({
-  origin: (origin, callback) => {
-    // No origin = same-origin / curl / Postman / server-to-server — allow.
-    if (!origin) return callback(null, true);
-    // Empty allowlist → allow every origin (open mode).
-    if (allowedOrigins.length === 0) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    // Block with a real error response instead of a thrown exception —
-    // the browser shows a clear "CORS error" in the console.
-    return callback(null, false);
-  },
-  credentials: true,
-  methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: [
-    'Content-Type',
-    'Authorization',
-    'X-Admin-Email',
-    'X-Admin-Secret',
-    'X-Requested-With',
-  ],
-  exposedHeaders: ['Content-Length', 'X-Total-Count'],
-  maxAge: 600,           // browser caches the preflight for 10 min
-  optionsSuccessStatus: 204,
-});
+function isOriginAllowed(origin) {
+  if (!origin) return true;
+  if (allowedOrigins.length === 0) return true;
+  return allowedOrigins.includes(origin.replace(/\/+$/, ''));
+}
 
-app.use(corsMiddleware);
-// Explicit OPTIONS handler — some hosts (Render's edge in particular)
-// occasionally route OPTIONS straight to the 404 handler before the
-// middleware chain completes. This one-liner guarantees every preflight
-// request gets a proper 204 with the CORS headers attached.
-app.options('*', corsMiddleware);
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && isOriginAllowed(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader(
+      'Access-Control-Allow-Methods',
+      'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS'
+    );
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      // Echo whatever the browser asked for in Access-Control-Request-
+      // Headers; fall back to the explicit list of headers our frontend
+      // is known to send. Echoing means we never have to update this
+      // file when the frontend starts using a new header.
+      req.headers['access-control-request-headers'] ||
+        'Content-Type, Authorization, X-Admin-Email, X-Admin-Secret, X-Requested-With'
+    );
+    res.setHeader('Access-Control-Max-Age', '600');
+  }
+  // Short-circuit preflight here so it never falls through to the
+  // global write-gate, the routes, or the 404 handler — any of which
+  // could strip our headers or return a non-204 status.
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  next();
+});
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
