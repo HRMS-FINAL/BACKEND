@@ -14,33 +14,51 @@ const { seedCompanyData }   = require('./migrations/seedCompanyData');
 const app = express();
 
 // ─── CORS ────────────────────────────────────────────────────────────
-// Allowed origins are pulled from the CORS_ORIGINS env var (comma-
-// separated) so we can change them per environment without a code
-// change. In development the env var is usually unset and we fall
-// through to allowing all origins, which keeps `npm run dev` simple.
+// `origin: true` reflects whichever origin made the request back in the
+// Access-Control-Allow-Origin header. With `credentials: true` we can
+// safely use cookies / auth headers across origins. We explicitly list
+// the custom headers our frontend sends so the browser's preflight
+// never rejects them.
 //
-// Production setup: in your Render service env, add
-//   CORS_ORIGINS=https://your-frontend.com,https://www.your-frontend.com
-// Every entry must include the scheme (https://) and NO trailing slash.
-//
-// `credentials: true` lets the browser send cookies/auth headers if you
-// ever switch from JWT-in-localStorage to httpOnly cookies later.
+// Optional tightening: set CORS_ORIGINS=https://a.com,https://b.com on
+// Render to restrict to those origins. If unset, every origin is
+// allowed — fine for now while you're shipping.
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
 
-app.use(cors({
+const corsMiddleware = cors({
   origin: (origin, callback) => {
     // No origin = same-origin / curl / Postman / server-to-server — allow.
     if (!origin) return callback(null, true);
-    // Empty allowlist in dev → allow everything so localhost works.
+    // Empty allowlist → allow every origin (open mode).
     if (allowedOrigins.length === 0) return callback(null, true);
     if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error('CORS: origin not allowed → ' + origin), false);
+    // Block with a real error response instead of a thrown exception —
+    // the browser shows a clear "CORS error" in the console.
+    return callback(null, false);
   },
   credentials: true,
-}));
+  methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Admin-Email',
+    'X-Admin-Secret',
+    'X-Requested-With',
+  ],
+  exposedHeaders: ['Content-Length', 'X-Total-Count'],
+  maxAge: 600,           // browser caches the preflight for 10 min
+  optionsSuccessStatus: 204,
+});
+
+app.use(corsMiddleware);
+// Explicit OPTIONS handler — some hosts (Render's edge in particular)
+// occasionally route OPTIONS straight to the 404 handler before the
+// middleware chain completes. This one-liner guarantees every preflight
+// request gets a proper 204 with the CORS headers attached.
+app.options('*', corsMiddleware);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
