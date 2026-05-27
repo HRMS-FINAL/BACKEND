@@ -13,7 +13,35 @@ const { seedCompanyData }   = require('./migrations/seedCompanyData');
 
 const app = express();
 
-app.use(cors());
+// ─── CORS ────────────────────────────────────────────────────────────
+// Allowed origins are pulled from the CORS_ORIGINS env var (comma-
+// separated) so we can change them per environment without a code
+// change. In development the env var is usually unset and we fall
+// through to allowing all origins, which keeps `npm run dev` simple.
+//
+// Production setup: in your Render service env, add
+//   CORS_ORIGINS=https://your-frontend.com,https://www.your-frontend.com
+// Every entry must include the scheme (https://) and NO trailing slash.
+//
+// `credentials: true` lets the browser send cookies/auth headers if you
+// ever switch from JWT-in-localStorage to httpOnly cookies later.
+const allowedOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // No origin = same-origin / curl / Postman / server-to-server — allow.
+    if (!origin) return callback(null, true);
+    // Empty allowlist in dev → allow everything so localhost works.
+    if (allowedOrigins.length === 0) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error('CORS: origin not allowed → ' + origin), false);
+  },
+  credentials: true,
+}));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan('dev'));
