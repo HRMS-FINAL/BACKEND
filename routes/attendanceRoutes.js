@@ -288,6 +288,43 @@ router.get('/stats', async (req, res) => {
 // ─────────────────────────────────────────────
 // DAILY ROUTE  (proxies to mobile backend)
 // ─────────────────────────────────────────────
+//
+// Tiny in-memory LRU cache so when HR repeatedly clicks "View Route" on
+// the Daily Routes / Allowance pages, we skip the round-trip to Render
+// entirely for 60 seconds. Two HRMS users hitting the same row also
+// share the cached response.
+//
+// Why two caches (frontend + here)
+//   • Frontend cache fixes "same browser, same row, repeat click".
+//   • This cache fixes "different browsers / users / tabs hitting the
+//     same row within 60s" — typical during morning HR review when
+//     multiple HRs are looking at yesterday's routes simultaneously.
+const ROUTE_CACHE_TTL_MS = 60 * 1000;
+const ROUTE_CACHE_MAX    = 500;          // bounded — eviction on overflow
+const routeCache  = new Map();           // key → { body, fetchedAt }
+const listCache   = new Map();           // key → { body, fetchedAt }
+
+function cacheGet(map, key) {
+  const hit = map.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.fetchedAt > ROUTE_CACHE_TTL_MS) {
+    map.delete(key);
+    return null;
+  }
+  // Touch to refresh LRU order.
+  map.delete(key);
+  map.set(key, hit);
+  return hit.body;
+}
+function cacheSet(map, key, body) {
+  if (map.size >= ROUTE_CACHE_MAX) {
+    // Evict the oldest entry. Map insertion order = LRU order because
+    // we re-insert on every hit (see cacheGet).
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
+  }
+  map.set(key, { body, fetchedAt: Date.now() });
+}
 // Two endpoints:
 //   GET /api/attendance/daily-routes?date=YYYY-MM-DD
 //     → table of every employee that day: km, checkIn/out, allowance flag.
@@ -313,6 +350,11 @@ router.get('/daily-routes', async (req, res) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return res.status(400).json({ success: false, message: 'date=YYYY-MM-DD required' });
     }
+    // 60-sec cache hit avoids the entire Render round-trip.
+    const cached = cacheGet(listCache, date);
+    if (cached) {
+      return res.json({ ...cached, cached: true });
+    }
     const r    = await fwdMobile(`/api/attendance/admin/daily-routes?date=${encodeURIComponent(date)}`);
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
@@ -321,7 +363,9 @@ router.get('/daily-routes', async (req, res) => {
         message: data?.message || `Mobile API responded ${r.status}`,
       });
     }
-    res.json({ success: true, date, items: data.items || [], total: data.count || 0 });
+    const body = { success: true, date, items: data.items || [], total: data.count || 0 };
+    cacheSet(listCache, date, body);
+    res.json(body);
   } catch (err) {
     console.error('[daily-routes proxy]', err.message);
     res.status(502).json({ success: false, message: 'Could not reach the mobile backend. ' + err.message });
@@ -345,6 +389,17 @@ router.get('/daily-route', async (req, res) => {
     if (!employeeId && !userId) {
       return res.status(400).json({ success: false, message: 'employeeId or userId required' });
     }
+
+    // 60-sec cache — most HR clicks land on the same (emp, date) pair
+    // multiple times in a row (open, close, reopen, share link with
+    // colleague). Skipping the Render round-trip cuts perceived
+    // latency from 1-3 sec to sub-millisecond.
+    const cacheKey = `${employeeId || 'u:' + userId}|${date}`;
+    const cached   = cacheGet(routeCache, cacheKey);
+    if (cached) {
+      return res.json({ ...cached, cached: true });
+    }
+
     const q = new URLSearchParams();
     if (employeeId) q.set('employeeId', employeeId);
     if (userId)     q.set('userId',     userId);
@@ -358,7 +413,9 @@ router.get('/daily-route', async (req, res) => {
         message: data?.message || `Mobile API responded ${r.status}`,
       });
     }
-    res.json({ success: true, ...data });
+    const body = { success: true, ...data };
+    cacheSet(routeCache, cacheKey, body);
+    res.json(body);
   } catch (err) {
     console.error('[daily-route proxy]', err.message);
     res.status(502).json({ success: false, message: 'Could not reach the mobile backend. ' + err.message });
