@@ -162,8 +162,24 @@ router.get('/attendance', async (req, res) => {
     });
 
     // Build rows
+    //
+    // LOP policy (set by HR on 2026-05-28):
+    //   • 1 CL/month is free; every extra approved-leave day is 1 LOP.
+    //   • 2 permissions/month are free; each extra permission costs 0.5 LOP.
+    //   • Lates accumulate: every 3 lates = 0.5 LOP, every 6 lates = 1 LOP.
+    //   • A raw 'Absent' day (no approved leave on file) is 1 LOP.
+    //
+    // We split the result into two display columns:
+    //   • lop       — whole-day LOP equivalents
+    //   • halfLop   — half-day LOP equivalents (each = 0.5 of a day)
     const rows = Object.values(grouped).map(g => {
       const emp = g.empDoc;
+      const excessLeaves = Math.max(0, g.leavedays - 1);
+      const excessPerms  = Math.max(0, g.halfDay   - 2);
+      const lateFullLop  = Math.floor(g.late / 6);
+      const lateHalfLop  = (g.late % 6 >= 3) ? 1 : 0;
+      const lopDays      = excessLeaves + g.absent + lateFullLop;
+      const halfLopDays  = excessPerms + lateHalfLop;
       return {
         employeeId:   g.employeeId,
         employeeName: g.employeeName,
@@ -173,12 +189,15 @@ router.get('/attendance', async (req, res) => {
         designation:  emp ? getDesig(emp.designation) : '—',
         manager:      emp?.assignedTo || '—',
         status:       emp?.status     || 'Active',
-        present:      g.present,
+        // For UI counts: Late is ALSO counted as present (employee did
+        // come in, just after the 10:01 AM cutoff).
+        present:      g.present + g.late,
         late:         g.late,
         absent:       g.absent,
         halfDay:      g.halfDay,
         leavedays:    g.leavedays,
-        lop:          Math.max(0, g.absent - g.leavedays),
+        lop:          lopDays,
+        halfLop:      halfLopDays,
       };
     });
 
