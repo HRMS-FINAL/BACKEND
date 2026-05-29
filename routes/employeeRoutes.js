@@ -498,7 +498,19 @@ router.put('/:id', async (req, res) => {
       }
     }
 
-    const employee = await Employee.findByIdAndUpdate(req.params.id, payload, { new: true, runValidators: false });
+    // If the email is being changed, capture the previous email and push
+    // it onto `emailHistory` in the SAME update. This is the safety net:
+    // even if a future edit silently fails, login by ANY of the older
+    // emails still works (the mobile auth checks emailHistory on lookup).
+    const updateOps = { $set: payload };
+    if (payload.email) {
+      const cur = await Employee.findById(req.params.id).select('email emailHistory').lean();
+      if (cur && cur.email && String(cur.email).toLowerCase() !== String(payload.email).toLowerCase()) {
+        updateOps.$addToSet = { emailHistory: String(cur.email).toLowerCase() };
+      }
+    }
+
+    const employee = await Employee.findByIdAndUpdate(req.params.id, updateOps, { new: true, runValidators: false });
     if (!employee) return res.status(404).json({ success: false, message: 'Employee not found' });
 
     return res.status(200).json({
