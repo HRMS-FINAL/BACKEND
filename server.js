@@ -73,8 +73,11 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// 12 MB ceiling — Announcement attachments are stored inline as base64
+// (max ~5 MB per file, ~6 MB after base64 inflation, plus a few attachments).
+// Other endpoints don't approach this, so the larger limit is harmless.
+app.use(express.json({ limit: '12mb' }));
+app.use(express.urlencoded({ extended: true, limit: '12mb' }));
 app.use(morgan('dev'));
 
 // Health check
