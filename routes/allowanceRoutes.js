@@ -98,6 +98,20 @@ function reshape(a) {
     toLng:    typeof a.toLng   === 'number' ? a.toLng   : null,
     amount:   Number(a.amount)   || 0,
     status:   titleCaseStatus(a.status),
+    // Manager-tier status. Set by the assigned manager via ERM Web's
+    // /api/manager/allowances/:id. HRMS Allowance.jsx blocks HR's
+    // Approve/Reject buttons until this becomes 'Approved'.
+    //   ''         → render "Awaiting Manager"  (Approve/Reject buttons)
+    //   'Approved' → unlock HR buttons
+    //   'Rejected' → short-circuit, no HR action available
+    managerStatus: (() => {
+      const m = String(a.managerStatus || '').trim().toLowerCase();
+      if (m === 'approved') return 'Approved';
+      if (m === 'rejected') return 'Rejected';
+      return '';
+    })(),
+    managerStatusBy: a.managerStatusBy || '',
+    managerStatusAt: a.managerStatusAt || null,
     date:     dateStr,
     type:     a.type,
     purpose:  a.purpose   || '',

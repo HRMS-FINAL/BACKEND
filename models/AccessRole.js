@@ -1,7 +1,7 @@
 // models/AccessRole.js — Access Management (previously Role)
 const mongoose = require('mongoose');
 
-const MODULES  = ['dashboard', 'employees', 'payroll', 'attendance', 'performance', 'settings', 'live_tracking'];
+const MODULES  = ['dashboard', 'employees', 'payroll', 'attendance', 'settings', 'live_tracking'];
 
 const permissionSchema = new mongoose.Schema(
   Object.fromEntries(MODULES.map(m => [m, {
