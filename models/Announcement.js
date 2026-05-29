@@ -50,12 +50,20 @@ const announcementSchema = new mongoose.Schema(
     expiryDate:  { type: Date, default: null },
 
     isPinned:    { type: Boolean, default: false },
+    // Attachments. Files are stored inline as base64 in `dataBase64` so
+    // HRMS doesn't need an external object store; `size` lets the UI
+    // show "2.3 MB" without re-measuring. Backend enforces a per-file
+    // ~5 MB ceiling at the route layer.
     attachments: {
       type: [
         {
-          name: { type: String, trim: true, default: '' },
-          url:  { type: String, trim: true, default: '' },
-          type: { type: String, trim: true, default: '' },
+          name:       { type: String, trim: true, default: '' },
+          mimeType:   { type: String, trim: true, default: '' },
+          size:       { type: Number, default: 0 },
+          dataBase64: { type: String, default: '' },
+          // Legacy field kept for older rows / external hosting cases.
+          url:        { type: String, trim: true, default: '' },
+          type:       { type: String, trim: true, default: '' },
         },
       ],
       default: [],

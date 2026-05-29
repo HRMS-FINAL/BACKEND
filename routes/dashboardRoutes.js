@@ -122,7 +122,7 @@ router.get('/stats', async (req, res) => {
           // Renamed Pending → Permission so HR sees at-a-glance how many
           // permission requests are awaiting action.  Trend = delta over
           // the same window as the other cards.
-          permission:     { label: 'Permission',      value: pendingPermissions, trend: ((pendingPermissions - pendingPermissionsLastWeek) >= 0 ? '+' : '') + (pendingPermissions - pendingPermissionsLastWeek), up: (pendingPermissions - pendingPermissionsLastWeek) >= 0, sub: 'awaiting review' },
+          permission:     { label: 'Permission',      value: pendingPermissions, trend: ((pendingPermissions - pendingPermissionsLastWeek) >= 0 ? '+' : '') + (pendingPermissions - pendingPermissionsLastWeek), up: (pendingPermissions - pendingPermissionsLastWeek) >= 0, sub: 'today' },
         },
         byDepartment,
         byStatus:         byStatusRaw.map(s => ({ status: s._id || 'Unknown', count: s.count })),
