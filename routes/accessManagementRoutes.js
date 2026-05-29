@@ -4,7 +4,7 @@ const router     = express.Router();
 const AccessRole = require('../models/AccessRole');
 const Employee   = require('../models/Employee');
 
-const MODULES = ['dashboard', 'employees', 'payroll', 'attendance', 'performance', 'settings', 'live_tracking'];
+const MODULES = ['dashboard', 'employees', 'payroll', 'attendance', 'settings', 'live_tracking'];
 async function ensureDefaultRoles() {
   const wanted = [
     { name: 'HR',       color: '#9F7AEA', description: 'Human Resources team — manages employees, payroll, leaves.' },

@@ -73,6 +73,7 @@ router.get('/stats', async (req, res) => {
       employeesLastMonth, activeLastMonth,
       onLeaveToday, onLeaveThisWeek,
       pendingApprovals, pendingLastWeek,
+      pendingPermissions, pendingPermissionsLastWeek,
       byDepartmentRaw, byStatusRaw, byEmploymentTypeRaw,
       recentEmployees, recentLeaves,
     ] = await Promise.all([
@@ -84,6 +85,8 @@ router.get('/stats', async (req, res) => {
       Leave.countDocuments({ status: 'Approved', fromDate: { $lte: endOfThisWeek.toISOString().slice(0,10) }, toDate: { $gte: startOfToday.toISOString().slice(0,10) } }),
       Leave.countDocuments({ status: 'Pending' }),
       Leave.countDocuments({ status: 'Pending', createdAt: { $lt: new Date(now - 7 * 86400000) } }),
+      Leave.countDocuments({ status: 'Pending', type: /permission/i }),
+      Leave.countDocuments({ status: 'Pending', type: /permission/i, createdAt: { $lt: new Date(now - 7 * 86400000) } }),
       Employee.aggregate([{ $match: { isActive: { $ne: false } } }, { $group: { _id: '$department', count: { $sum: 1 } } }, { $sort: { count: -1 } }]),
       Employee.aggregate([{ $match: { isActive: { $ne: false } } }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
       Employee.aggregate([{ $match: { isActive: { $ne: false } } }, { $group: { _id: '$employmentType', count: { $sum: 1 } } }]),
@@ -112,14 +115,17 @@ router.get('/stats', async (req, res) => {
           totalEmployees: { label: 'Total Employees', value: totalEmployees, trend: (pctChange(totalEmployees, employeesLastMonth) >= 0 ? '+' : '') + pctChange(totalEmployees, employeesLastMonth) + '%', up: pctChange(totalEmployees, employeesLastMonth) >= 0, sub: 'vs last month' },
           activeStaff:    { label: 'Active Staff',    value: activeEmployees, trend: (pctChange(activeEmployees, activeLastMonth) >= 0 ? '+' : '') + pctChange(activeEmployees, activeLastMonth) + '%', up: true, sub: 'currently working' },
           onLeave:        { label: 'On Leave',        value: onLeaveToday, trend: String(onLeaveThisWeek - onLeaveToday), up: false, sub: 'this week' },
-          pending:        { label: 'Pending',         value: pendingApprovals, trend: ((pendingApprovals - pendingLastWeek) >= 0 ? '+' : '') + (pendingApprovals - pendingLastWeek), up: (pendingApprovals - pendingLastWeek) >= 0, sub: 'approvals needed' },
+          // Renamed Pending → Permission so HR sees at-a-glance how many
+          // permission requests are awaiting action.  Trend = delta over
+          // the same window as the other cards.
+          permission:     { label: 'Permission',      value: pendingPermissions, trend: ((pendingPermissions - pendingPermissionsLastWeek) >= 0 ? '+' : '') + (pendingPermissions - pendingPermissionsLastWeek), up: (pendingPermissions - pendingPermissionsLastWeek) >= 0, sub: 'requests pending' },
         },
         byDepartment,
         byStatus:         byStatusRaw.map(s => ({ status: s._id || 'Unknown', count: s.count })),
         byEmploymentType: byEmploymentTypeRaw.map(t => ({ type: t._id || 'Unknown', count: t.count })),
         recentEmployees,
         recentLeaves,
-        counts: { totalEmployees, activeEmployees, onLeaveToday, onLeaveThisWeek, pendingApprovals },
+        counts: { totalEmployees, activeEmployees, onLeaveToday, onLeaveThisWeek, pendingApprovals, pendingPermissions },
       },
       generatedAt: new Date().toISOString(),
     });
