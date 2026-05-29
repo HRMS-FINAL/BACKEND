@@ -63,6 +63,32 @@ router.get('/attendance-today', async (req, res) => {
   }
 });
 
+// Internal helper: pull today's attendance from the mobile backend and
+// return per-status counts. Used by /stats to compute On Leave + Permission
+// straight from attendance logs (HR's source of truth) instead of the
+// HRMS LeaveRequest collection (which only carries leave-approval rows).
+async function getTodayAttendanceCounts() {
+  const blank = { present: 0, late: 0, leave: 0, permission: 0, total: 0 };
+  if (!ADMIN_SECRET || typeof fetch !== 'function') return blank;
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const r = await fetch(MOBILE_API + '/api/attendance/admin/all?date=' + today, {
+      headers: { 'x-admin-secret': ADMIN_SECRET },
+    });
+    if (!r.ok) return blank;
+    const j = await r.json().catch(() => ({}));
+    const items = Array.isArray(j.items) ? j.items : [];
+    const c = (s) => items.filter(a => String(a.status || '').toLowerCase() === s).length;
+    return {
+      present:    c('present'),
+      late:       c('late'),
+      leave:      c('leave'),
+      permission: c('permission') + c('halfday'),
+      total:      items.length,
+    };
+  } catch { return blank; }
+}
+
 // GET /api/dashboard/stats — All stats in one call
 router.get('/stats', async (req, res) => {
   try {
@@ -80,6 +106,11 @@ router.get('/stats', async (req, res) => {
       pendingPermissions, pendingPermissionsLastWeek,
       byDepartmentRaw, byStatusRaw, byEmploymentTypeRaw,
       recentEmployees, recentLeaves,
+      // Live attendance-log counts for today. The On Leave + Permission
+      // dashboard tiles read from here so they reflect what the employee
+      // ACTUALLY did today (mobile app statuses), not what's been
+      // approved in the LeaveRequest pipeline.
+      attendanceToday,
     ] = await Promise.all([
       Employee.countDocuments({ isActive: { $ne: false } }),
       Employee.countDocuments({ status: 'Active', isActive: { $ne: false } }),
@@ -96,6 +127,7 @@ router.get('/stats', async (req, res) => {
       Employee.aggregate([{ $match: { isActive: { $ne: false } } }, { $group: { _id: '$employmentType', count: { $sum: 1 } } }]),
       Employee.find().sort({ createdAt: -1 }).limit(5).select('firstName lastName email employeeId department designation createdAt').lean(),
       Leave.find().sort({ createdAt: -1 }).limit(5).lean(),
+      getTodayAttendanceCounts(),
     ]);
 
     const pctChange = (cur, prev) => prev === 0 ? (cur > 0 ? 100 : 0) : +(((cur - prev) / prev) * 100).toFixed(1);
@@ -118,18 +150,29 @@ router.get('/stats', async (req, res) => {
         cards: {
           totalEmployees: { label: 'Total Employees', value: totalEmployees, trend: (pctChange(totalEmployees, employeesLastMonth) >= 0 ? '+' : '') + pctChange(totalEmployees, employeesLastMonth) + '%', up: pctChange(totalEmployees, employeesLastMonth) >= 0, sub: 'vs last month' },
           activeStaff:    { label: 'Active Staff',    value: activeEmployees, trend: (pctChange(activeEmployees, activeLastMonth) >= 0 ? '+' : '') + pctChange(activeEmployees, activeLastMonth) + '%', up: true, sub: 'currently working' },
-          onLeave:        { label: 'On Leave',        value: onLeaveToday, trend: String(onLeaveThisWeek - onLeaveToday), up: false, sub: 'this week' },
-          // Renamed Pending → Permission so HR sees at-a-glance how many
-          // permission requests are awaiting action.  Trend = delta over
-          // the same window as the other cards.
-          permission:     { label: 'Permission',      value: pendingPermissions, trend: ((pendingPermissions - pendingPermissionsLastWeek) >= 0 ? '+' : '') + (pendingPermissions - pendingPermissionsLastWeek), up: (pendingPermissions - pendingPermissionsLastWeek) >= 0, sub: 'today' },
+          // On Leave + Permission now come straight from today's
+          // attendance logs (mobile-backend source of truth) instead of
+          // approved leave requests / pending requests. HR asked for the
+          // dashboard to reflect what people did TODAY, not what's been
+          // queued through the approval pipeline.
+          onLeave:        { label: 'On Leave',        value: attendanceToday.leave,      trend: '—', up: false, sub: 'today' },
+          permission:     { label: 'Permission',      value: attendanceToday.permission, trend: '—', up: false, sub: 'today' },
         },
         byDepartment,
         byStatus:         byStatusRaw.map(s => ({ status: s._id || 'Unknown', count: s.count })),
         byEmploymentType: byEmploymentTypeRaw.map(t => ({ type: t._id || 'Unknown', count: t.count })),
         recentEmployees,
         recentLeaves,
-        counts: { totalEmployees, activeEmployees, onLeaveToday, onLeaveThisWeek, pendingApprovals, pendingPermissions },
+        counts: {
+          totalEmployees,
+          activeEmployees,
+          // onLeaveToday now mirrors the attendance-log count so the
+          // sub-cards in the Dashboard.jsx top row stay in sync.
+          onLeaveToday:    attendanceToday.leave,
+          onLeaveThisWeek,
+          pendingApprovals,
+          pendingPermissions: attendanceToday.permission,
+        },
       },
       generatedAt: new Date().toISOString(),
     });

@@ -31,6 +31,11 @@ const employeeSchema = new mongoose.Schema(
     password:       { type: String, required: [true, 'Password is required'], minlength: 6, select: false },
     email:          { type: String, required: [true, 'Email is required'], unique: true, lowercase: true, trim: true,
                       match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Please provide a valid email'] },
+    // Every previous email this employee has had. We push the old value
+    // onto this array whenever HR edits the email so login / forgot-password
+    // by an OLD email keeps working. Indispensable when the HRMS edit
+    // briefly silently-fails or when HR makes a typo and re-edits later.
+    emailHistory:   { type: [String], default: [], index: true },
     phone:          { type: String, required: [true, 'Phone is required'], trim: true,
                       validate: { validator: v => /^\d{10,15}$/.test(v.replace(/[\s-]/g, '')), message: 'Phone must be at least 10 digits' } },
     address:        { type: addressSchema, default: () => ({}) },
@@ -46,7 +51,10 @@ const employeeSchema = new mongoose.Schema(
     employmentType: { type: String, enum: ['Full-time', 'Part-time', 'Contract', 'Intern', ''], default: '' },
     joiningDate:    { type: Date, required: [true, 'Joining date is required'] },
     salary:         { type: Number, required: [true, 'Salary is required'], min: 0 },
-    assignedTo:     { type: String, required: [true, 'Manager assignment is required'], trim: true },
+    // assignedTo is OPTIONAL — top-level roles (Managing Director, CEO,
+    // executive heads) have no manager above them, and Add Employee
+    // needs to accept those rows too.
+    assignedTo:     { type: String, default: '', trim: true },
     education:      { type: educationSchema, required: true },
     status:         { type: String, enum: ['Active', 'Inactive', 'On Leave', 'Terminated'], default: 'Active' },
     isActive:       { type: Boolean, default: true },
