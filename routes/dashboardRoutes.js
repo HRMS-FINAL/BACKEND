@@ -32,8 +32,12 @@ router.get('/attendance-today', async (req, res) => {
     const items = j.items || [];
 
     const totalEmployees = await Employee.countDocuments({ isActive: { $ne: false } });
-    const present    = items.filter(a => a.status === 'present').length;
+    // Late is also Present — the employee did show up, just after the
+    // 10:01 AM cutoff. Treat their check-in as a present-day for the
+    // headline Present count, while still surfacing Late separately so
+    // the LOP-accumulation rule (3 lates = 0.5 LOP, 6 = 1 LOP) is visible.
     const late       = items.filter(a => a.status === 'late').length;
+    const present    = items.filter(a => a.status === 'present').length + late;
     const leave      = items.filter(a => a.status === 'leave').length;
     const permission = items.filter(a => a.status === 'permission' || a.status === 'halfday').length;
     const checkedIn  = items.filter(a => !!a.checkIn).length;
@@ -118,7 +122,7 @@ router.get('/stats', async (req, res) => {
           // Renamed Pending → Permission so HR sees at-a-glance how many
           // permission requests are awaiting action.  Trend = delta over
           // the same window as the other cards.
-          permission:     { label: 'Permission',      value: pendingPermissions, trend: ((pendingPermissions - pendingPermissionsLastWeek) >= 0 ? '+' : '') + (pendingPermissions - pendingPermissionsLastWeek), up: (pendingPermissions - pendingPermissionsLastWeek) >= 0, sub: 'requests pending' },
+          permission:     { label: 'Permission',      value: pendingPermissions, trend: ((pendingPermissions - pendingPermissionsLastWeek) >= 0 ? '+' : '') + (pendingPermissions - pendingPermissionsLastWeek), up: (pendingPermissions - pendingPermissionsLastWeek) >= 0, sub: 'awaiting review' },
         },
         byDepartment,
         byStatus:         byStatusRaw.map(s => ({ status: s._id || 'Unknown', count: s.count })),
