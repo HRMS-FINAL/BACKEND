@@ -44,7 +44,8 @@ function fmtDate(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return String(iso);
-  return `${MONTHS[d.getMonth()]} ${String(d.getDate()).padStart(2, '0')}, ${d.getFullYear()}`;
+  // dd-mm-yyyy — matches the HRMS-wide date format.
+  return `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`;
 }
 function fmtDateTime(iso) {
   if (!iso) return '';
@@ -167,6 +168,14 @@ function reshape(d) {
     hrComment:     d.hrComment   || '',
     reviewedAt:    d.reviewedAt  || null,
     createdAt:     d.createdAt   || null,
+    // Raw ISO dates — needed by the Employee Master report so it can
+    // count overlap with the picked date range. Without these the
+    // report's "On Leave" + "Leave Days" tiles always read 0 because
+    // the formatted `date` string can't be compared lexically.
+    startDate:     d.startDate || '',
+    endDate:       d.endDate   || '',
+    permissionDate: d.date     || '',     // permission rows use this
+    leaveType:     d.leaveType || d.permissionType || '',
   };
 }
 
@@ -239,20 +248,14 @@ router.get('/', async (req, res) => {
 
 /**
  * PATCH /api/leave-requests/:id
- * Body: { status, hrComment?, reviewedBy? }
- * Forwards to PATCH /api/leave/admin/:id which fires the notification.
- * Accepts Title-Case 'Approved'/'Rejected'/'Pending' or lowercase.
+ * Body: { managerStatus?, status?, message?, managerNote?, hrNote? }
+ * Forwards the approval / rejection decision to the mobile backend.
  */
 router.patch('/:id', async (req, res) => {
   if (!configReady(res)) return;
   try {
-    const body = req.body || {};
-    const payload = {};
-    if (body.status     !== undefined) payload.status     = String(body.status).toLowerCase();
-    if (body.hrComment  !== undefined) payload.hrComment  = String(body.hrComment);
-    if (body.reviewedBy !== undefined) payload.reviewedBy = String(body.reviewedBy);
-
-    const r = await fwd(`/api/leave/admin/${encodeURIComponent(req.params.id)}`, {
+    const payload = req.body || {};
+    const r = await fwd('/api/leave/admin/' + encodeURIComponent(req.params.id), {
       method:  'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(payload),
@@ -261,7 +264,7 @@ router.patch('/:id', async (req, res) => {
     if (!r.ok) {
       return res.status(r.status).json({
         success: false,
-        message: data?.message || `Mobile API responded ${r.status}`,
+        message: data?.message || ('Mobile API responded ' + r.status),
       });
     }
     res.json({

@@ -65,10 +65,16 @@ function safeLabel(value, sidecar) {
  * etc.) — we surface the ones the UI uses today and tack the rest under
  * `extras` in case the page wants them later.
  */
+// dd-mm-yyyy — matches the HRMS-wide date format.
+function fmtDDMMYYYY(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  return `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`;
+}
+
 function reshape(a) {
-  const dateStr = a.date
-    ? (typeof a.date === 'string' ? a.date : new Date(a.date).toISOString().split('T')[0])
-    : '';
+  const dateStr = fmtDDMMYYYY(a.date);
   const empId   = pickEmpId(a.user);
   const empName = pickEmpName(a.user) || '—';
   // Resolve designation / department to human labels — reject any raw
