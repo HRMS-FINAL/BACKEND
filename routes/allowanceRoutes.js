@@ -97,6 +97,12 @@ function reshape(a) {
     toLat:    typeof a.toLat   === 'number' ? a.toLat   : null,
     toLng:    typeof a.toLng   === 'number' ? a.toLng   : null,
     amount:   Number(a.amount)   || 0,
+    // HR-side approval breakdown. approvedAmount may be < amount when HR
+    // signs off only a portion of the claim; rejectedAmount is what HR
+    // struck off. amountComment is HR's reason for any haircut.
+    approvedAmount: Number(a.approvedAmount) || 0,
+    rejectedAmount: Number(a.rejectedAmount) || 0,
+    amountComment:  a.amountComment || '',
     status:   titleCaseStatus(a.status),
     // Manager-tier status. Set by the assigned manager via ERM Web's
     // /api/manager/allowances/:id. HRMS Allowance.jsx blocks HR's
@@ -222,6 +228,12 @@ router.patch('/:id', async (req, res) => {
     if (body.status     !== undefined) payload.status     = String(body.status).toLowerCase();
     if (body.hrComment  !== undefined) payload.hrComment  = String(body.hrComment);
     if (body.reviewedBy !== undefined) payload.reviewedBy = String(body.reviewedBy);
+    // HR-side approval breakdown — pass straight through to the mobile
+    // backend. approvedAmount is what HR signed off on (≤ requested
+    // amount); rejectedAmount is derived server-side. amountComment is
+    // HR's reason for any haircut and shows up in the employee notif.
+    if (body.approvedAmount !== undefined) payload.approvedAmount = Number(body.approvedAmount);
+    if (body.amountComment  !== undefined) payload.amountComment  = String(body.amountComment);
 
     const r = await fwd(`/api/allowance/admin/${encodeURIComponent(req.params.id)}`, {
       method:  'PATCH',
