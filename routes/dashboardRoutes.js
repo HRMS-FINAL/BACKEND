@@ -8,11 +8,13 @@ const Department = require('../models/Department');
 const MOBILE_API   = (process.env.MOBILE_API_URL    || 'https://backend-emqy.onrender.com').replace(/\/+$/, '');
 const ADMIN_SECRET =  process.env.MOBILE_ADMIN_SECRET || '';
 
-// GET /api/dashboard/attendance-today
-// Returns today's live attendance pulled from the mobile backend
-// (counts of present / late / leave / permission / absent) for the
-// dashboard "Attendance & Leave" widget. Falls back to {success:false}
-// without crashing if the mobile backend is unreachable.
+// GET /api/dashboard/attendance-today[?date=YYYY-MM-DD]
+// Returns the live attendance pulled from the mobile backend (counts of
+// present / late / leave / permission / absent) for the dashboard
+// "Attendance & Leave" widget. Accepts an optional `date` query so the
+// dashboard mini-calendar can fetch any past day's stats — defaults to
+// today. Falls back to {success:false} without crashing if the mobile
+// backend is unreachable.
 router.get('/attendance-today', async (req, res) => {
   if (!ADMIN_SECRET || typeof fetch !== 'function') {
     return res.status(200).json({
@@ -22,7 +24,10 @@ router.get('/attendance-today', async (req, res) => {
   }
   try {
     const today = new Date().toISOString().slice(0, 10);
-    const r = await fetch(MOBILE_API + '/api/attendance/admin/all?date=' + today, {
+    // Accept ?date=YYYY-MM-DD. Anything malformed → fall back to today.
+    const reqDate = String(req.query.date || '').trim();
+    const target  = /^\d{4}-\d{2}-\d{2}$/.test(reqDate) ? reqDate : today;
+    const r = await fetch(MOBILE_API + '/api/attendance/admin/all?date=' + target, {
       headers: { 'x-admin-secret': ADMIN_SECRET },
     });
     if (!r.ok) {
@@ -55,7 +60,7 @@ router.get('/attendance-today', async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: { date: today, totalEmployees, present, late, leave, permission, absent, recent: logs },
+      data: { date: target, totalEmployees, present, late, leave, permission, absent, recent: logs },
     });
   } catch (err) {
     console.error('[dashboard/attendance-today]', err.message);
@@ -195,9 +200,9 @@ router.get('/summary', async (req, res) => {
     return res.status(200).json({
       success: true,
       summary: { totalEmployees, totalLeaves, approvedLeaves, pendingLeaves, rejectedLeaves },
-      generatedAt: new Date().toISOString(),
     });
   } catch (err) {
+    console.error('[DASHBOARD] Summary error:', err);
     return res.status(500).json({ success: false, message: err.message });
   }
 });
