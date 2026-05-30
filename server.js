@@ -89,6 +89,65 @@ app.get('/', (req, res) => {
   });
 });
 
+// ─── Diagnostic — read-only, no auth ─────────────────────────────────
+// Surfaces exactly what's in the DB so an empty-screen problem can be
+// triaged in one click instead of guessing between "DB connection
+// broken", "collection wiped", or "filter hiding everything".
+//
+// For each major collection it returns:
+//   • totalAll       — every doc, regardless of soft-delete state
+//   • visibleActive  — what the normal HRMS UI sees (isActive !== false)
+//
+// If totalAll is 0, the DB is empty / wrong cluster / connection broken.
+// If totalAll > 0 but visibleActive is 0, a soft-delete migration hid them.
+// If both are high but the frontend shows zero, the issue is on the
+// frontend / proxy side, not the DB.
+app.get('/api/_diag', async (req, res) => {
+  const mongoose = require('mongoose');
+  const out = {
+    success: true,
+    timestamp: new Date().toISOString(),
+    env: {
+      hasMongoUri:        Boolean(process.env.MONGO_URI),
+      hasMobileSecret:    Boolean(process.env.MOBILE_ADMIN_SECRET),
+      mobileApi:          process.env.MOBILE_API_URL || null,
+      corsRestricted:     Boolean(process.env.CORS_ORIGINS),
+      nodeEnv:            process.env.NODE_ENV || null,
+    },
+    mongo: {
+      readyState:   mongoose.connection.readyState,
+      readyLabel:   ['disconnected','connected','connecting','disconnecting'][mongoose.connection.readyState] || 'unknown',
+      host:         mongoose.connection.host || null,
+      name:         mongoose.connection.name || null,
+    },
+    collections: {},
+  };
+  // Each entry is [model name, file path]. Wrap in try so a single
+  // broken model doesn't take down the whole diagnostic.
+  const checks = [
+    ['Employee',     './models/Employee'],
+    ['Department',   './models/Department'],
+    ['Designation',  './models/Designation'],
+    ['Asset',        './models/Asset'],
+    ['Attendance',   './models/Attendance'],
+    ['LeaveRequest', './models/LeaveRequest'],
+    ['Announcement', './models/Announcement'],
+  ];
+  for (const [label, path] of checks) {
+    try {
+      const M = require(path);
+      const [totalAll, visibleActive] = await Promise.all([
+        M.countDocuments({}),
+        M.countDocuments({ isActive: { $ne: false } }),
+      ]);
+      out.collections[label] = { totalAll, visibleActive };
+    } catch (e) {
+      out.collections[label] = { error: e.message };
+    }
+  }
+  res.status(200).json(out);
+});
+
 // ════════════════════════════════════════════════════════════════════════
 // GLOBAL ADMIN WRITE GATE
 //
@@ -178,64 +237,19 @@ connectDB().then(() => {
     console.log('\nHRM Backend running on port ' + PORT + ' [' + (process.env.NODE_ENV || 'development') + ']');
     console.log('  API base: http://localhost:' + PORT + '/api\n');
 
-    // Self-ping every 10 minutes so the service doesn't sleep on free tiers.
+        // Self-ping every 10 minutes so the service doesn't sleep on
+    // Render's free tier. Skipped automatically in dev (RENDER_EXTERNAL_URL
+    // is unset), enabled in production via Render's injected env var.
     startKeepAlive(PORT);
 
-    // Mobile sync self-check
-    setTimeout(async () => {
-      const mobileApi = (process.env.MOBILE_API_URL || 'https://backend-emqy.onrender.com').replace(/\/+$/, '');
-      const secret    =  process.env.MOBILE_ADMIN_SECRET || '';
-      if (!secret) {
-        console.warn('[mobile-sync] MOBILE_ADMIN_SECRET not set in HRMS .env — employees created here will not be able to log into the mobile ERM app.');
-        return;
-      }
-      if (typeof fetch !== 'function') {
-        console.warn('[mobile-sync] global fetch unavailable - need Node 18+');
-        return;
-      }
-      try {
-        const r = await fetch(mobileApi + '/api/auth/admin/users?limit=1', {
-          headers: { 'x-admin-secret': secret },
-        });
-        if (r.status === 401) {
-          console.warn('[mobile-sync] MOBILE_ADMIN_SECRET is wrong — mobile backend rejected it.');
-        } else if (!r.ok) {
-          console.warn('[mobile-sync] Mobile backend returned ' + r.status + ' during self-check');
-        } else {
-          const j = await r.json().catch(() => ({}));
-          console.log('[mobile-sync] OK — mobile backend reachable; ' + (j.total || '?') + ' users in mobile DB');
-        }
-      } catch (err) {
-        console.warn('[mobile-sync] Cannot reach ' + mobileApi + ': ' + err.message);
-      }
-    }, 6000);
-
-    // Seed departments + designations from the HR catalogue if empty.
-    setTimeout(() => {
-      seedCompanyData().catch(e => console.warn('[SEED]', e.message));
-    }, 4000);
-
-    // Auto-migrate any legacy mobile users into the employees collection.
-    if (process.env.IMPORT_MOBILE_ON_STARTUP !== 'false') {
-      setTimeout(async () => {
-        try {
-          console.log('[IMPORT] Auto-running mobile->HRMS employee migration...');
-          const result = await importMobileUsers();
-          if (result.success) {
-            console.log('[IMPORT] OK ' + result.message + ' (' + result.errors.length + ' errors)');
-            if (result.errors.length > 0) {
-              console.warn('[IMPORT] errors:', JSON.stringify(result.errors.slice(0, 5), null, 2));
-            }
-          } else {
-            console.warn('[IMPORT] failed: ' + result.message);
-          }
-        } catch (err) {
-          console.warn('[IMPORT] startup migration failed: ' + err.message);
-        }
-      }, 5000);
-    }
+    // One-shot import + seed. The import-from-mobile job runs once on
+    // startup to copy any new mobile users into the local Employee model;
+    // the seed populates default departments / designations on first
+    // boot so an empty install still has dropdown choices in HRMS.
+    importMobileUsers().catch((e) => console.error('[import] failed:', e.message));
+    seedCompanyData().catch((e) => console.error('[seed] failed:', e.message));
   });
-}).catch(err => {
-  console.error('Failed to connect to MongoDB:', err.message);
+}).catch((err) => {
+  console.error('Could not start HRM Backend:', err.message);
   process.exit(1);
 });
