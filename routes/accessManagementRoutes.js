@@ -33,8 +33,24 @@ router.get('/', async (req, res) => {
     const roles = await AccessRole.find({ isActive: true }).sort({ createdAt: 1 }).lean();
 
     const employees = await Employee.find({ isActive: { $ne: false } })
-      .select('accessRole role firstName lastName name email employeeId assignedTo')
+      .select('accessRole role firstName lastName name email employeeId assignedTo department departmentName designation designationTitle')
       .lean();
+
+    // HR admin allowlist — same emails used by the global write-gate.
+    // Anyone whose email matches is bucketed as HR (highest priority).
+    let isAdminEmail;
+    try { isAdminEmail = require('../middleware/authMiddleware').isAdminEmail; }
+    catch { isAdminEmail = () => false; }
+
+    // Helper — pull a usable string out of department + designation
+    // which can be either a populated object or just an ObjectId/null.
+    const lower = (v) => String(v || '').trim().toLowerCase();
+    const deptStr = (e) =>
+      lower(e.departmentName) ||
+      lower(e.department && (e.department.name || e.department));
+    const desigStr = (e) =>
+      lower(e.designationTitle) ||
+      lower(e.designation && (e.designation.title || e.designation));
 
     // Build a set of every name / email / id that appears as someone
     // else's "Assigned To" (i.e. manager). Anyone in this set is treated
@@ -61,15 +77,32 @@ router.get('/', async (req, res) => {
 
     for (const e of employees) {
       let bucket = null;
-      // 1. Explicit accessRole pointer wins (HR-set in the UI).
-      if (e.accessRole) bucket = roleByObjId[String(e.accessRole)] || null;
-      // 2. Anyone listed as another employee's "Assigned To" is a Manager
-      //    — this is the rule HR asked for and supersedes the older
-      //    `role === 'admin'` heuristic.
-      if (!bucket && isManager(e)) bucket = 'Manager';
-      // 3. Fallback to the legacy `role` string.
+      // 1. HR admin allowlist wins — the people listed in
+      //    HRMS_ADMIN_EMAILS are HR by definition.
+      if (isAdminEmail(e.email)) bucket = 'HR';
+      // 2. Department or designation says "HR" → HR bucket.
       if (!bucket) {
-        const r = String(e.role || '').toLowerCase();
+        const dept  = deptStr(e);
+        const desig = desigStr(e);
+        if (dept === 'hr' || dept === 'human resources' ||
+            desig.includes('hr') || desig.includes('human resources')) {
+          bucket = 'HR';
+        }
+      }
+      // 3. Explicit accessRole pointer set by HR in the UI.
+      if (!bucket && e.accessRole) bucket = roleByObjId[String(e.accessRole)] || null;
+      // 4. Anyone referenced as someone else's "Assigned To" is a Manager.
+      //    Also anyone whose designation contains "Manager" / "Lead" /
+      //    "Director" / "CEO" / "CTO" — those are managerial roles.
+      if (!bucket) {
+        const desig = desigStr(e);
+        if (isManager(e) || /manager|lead|director|ceo|cto|cfo|coo|head/i.test(desig)) {
+          bucket = 'Manager';
+        }
+      }
+      // 5. Legacy `role` string (kept for backwards-compat).
+      if (!bucket) {
+        const r = lower(e.role);
         if (r === 'hr')         bucket = 'HR';
         else if (r === 'admin') bucket = 'Manager';
         else                    bucket = 'Employee';
@@ -123,7 +156,7 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// PUT /api/access-management/:id/permissions — update permission matrix
+// PUT /api/access-management/:id/permissions - update permission matrix
 router.put('/:id/permissions', async (req, res) => {
   try {
     const { permissions } = req.body;
@@ -136,12 +169,12 @@ router.put('/:id/permissions', async (req, res) => {
   }
 });
 
-// DELETE /api/access-management/:id — soft delete
+// DELETE /api/access-management/:id - soft-delete
 router.delete('/:id', async (req, res) => {
   try {
     const role = await AccessRole.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
     if (!role) return res.status(404).json({ success: false, message: 'Access role not found' });
-    res.status(200).json({ success: true, message: 'Access role "' + role.name + '" deleted' });
+    res.status(200).json({ success: true, message: 'Access role deleted successfully' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

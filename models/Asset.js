@@ -74,6 +74,32 @@ assetSchema.index({ isActive: 1, status: 1 });
 assetSchema.index({ type: 1 });
 assetSchema.index({ serialNo: 1 }, { unique: true, partialFilterExpression: { isActive: true } });
 
+// ─── Legacy index cleanup ─────────────────────────────────────────────
+// Earlier deployments created a `serialNo_1` index that was FULL-UNIQUE
+// (not partial). After we switched to partial-unique above, the old
+// index sticks around in Mongo and throws E11000 the moment HR tries to
+// re-issue a serial that was used by a soft-deleted asset. This hook
+// drops the legacy index ONCE on startup, leaving only the new partial
+// one in place. Idempotent — `dropIndex` throws if it's already gone,
+// we swallow that case.
+async function dropLegacySerialNoIndex() {
+  try {
+    const coll = mongoose.connection.collection('assets');
+    const indexes = await coll.indexes();
+    for (const idx of indexes) {
+      // The legacy full-unique index is `serialNo_1` with NO
+      // partialFilterExpression. The new one has the filter; keep it.
+      if (idx.name === 'serialNo_1' && !idx.partialFilterExpression) {
+        await coll.dropIndex('serialNo_1');
+        console.log('[Asset] dropped legacy full-unique serialNo_1 index');
+      }
+    }
+  } catch (e) { console.warn('[Asset] index cleanup:', e.message); }
+}
+// Run when the connection is open. Wrap in setTimeout so it doesn't
+// race with the rest of model registration.
+mongoose.connection.once('open', () => setTimeout(dropLegacySerialNoIndex, 2000));
+
 // Auto-generate assetId like AST-001 if not supplied.
 //
 // IMPORTANT — modern Mongoose v6+ does NOT pass a `next` callback to
