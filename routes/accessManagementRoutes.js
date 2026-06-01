@@ -33,8 +33,27 @@ router.get('/', async (req, res) => {
     const roles = await AccessRole.find({ isActive: true }).sort({ createdAt: 1 }).lean();
 
     const employees = await Employee.find({ isActive: { $ne: false } })
-      .select('accessRole role')
+      .select('accessRole role firstName lastName name email employeeId assignedTo')
       .lean();
+
+    // Build a set of every name / email / id that appears as someone
+    // else's "Assigned To" (i.e. manager). Anyone in this set is treated
+    // as a Manager regardless of their `role` field — HR's request is
+    // that "the people in the Assigned To dropdown ARE the managers".
+    const managerKeys = new Set();
+    for (const e of employees) {
+      const a = String(e.assignedTo || '').trim().toLowerCase();
+      if (a) managerKeys.add(a);
+    }
+    // Helper — does this employee look like a manager?
+    const isManager = (e) => {
+      const candidates = [
+        e.firstName, e.lastName,
+        e.firstName && e.lastName ? `${e.firstName} ${e.lastName}` : null,
+        e.name, e.email, e.employeeId,
+      ].filter(Boolean).map(s => String(s).trim().toLowerCase());
+      return candidates.some(c => managerKeys.has(c));
+    };
 
     const roleByObjId = Object.fromEntries(roles.map(r => [String(r._id), r.name]));
     const memberCount = {};
@@ -42,7 +61,13 @@ router.get('/', async (req, res) => {
 
     for (const e of employees) {
       let bucket = null;
+      // 1. Explicit accessRole pointer wins (HR-set in the UI).
       if (e.accessRole) bucket = roleByObjId[String(e.accessRole)] || null;
+      // 2. Anyone listed as another employee's "Assigned To" is a Manager
+      //    — this is the rule HR asked for and supersedes the older
+      //    `role === 'admin'` heuristic.
+      if (!bucket && isManager(e)) bucket = 'Manager';
+      // 3. Fallback to the legacy `role` string.
       if (!bucket) {
         const r = String(e.role || '').toLowerCase();
         if (r === 'hr')         bucket = 'HR';
