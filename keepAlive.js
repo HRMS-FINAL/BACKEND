@@ -1,93 +1,45 @@
 /**
- * Keep-alive ping for the HRMS backend.
+ * Keep-alive self-pinger
+ * ─────────────────────────────────────────────────────────────────────
+ * Render's free tier suspends a web service after ~15 min of zero
+ * inbound HTTP traffic and takes 30-60 s to spin back up. That cold
+ * start lands on the user when they hit the app first thing in the
+ * morning, which feels broken.
  *
- * Render's free tier (and similar PaaS plans) put the service to sleep
- * after ~15 minutes of inactivity, and the first request after that takes
- * ~30s to wake. While the server is asleep, the HRMS frontend's
- * /api/employees / /api/announcements / /api/complaints calls time out,
- * which makes the lists look empty.
+ * This module hits the service's own `/api/_health` endpoint every
+ * 14 minutes (just under Render's idle timeout) so the dyno stays
+ * warm 24/7. We use the `RENDER_EXTERNAL_URL` env var Render injects
+ * automatically; if it's missing (local dev) the pinger is a no-op.
  *
- * This module schedules a self-ping every 10 minutes — well under the
- * 15-minute idle threshold — so the API stays warm.
- *
- * Uses setInterval rather than node-cron so we don't pull in another
- * dependency. The frequency / target URL can be overridden via env vars:
- *   PING_URL              full URL (overrides everything)
- *   RENDER_EXTERNAL_URL   auto-set by Render — used as base
- *   KEEP_ALIVE=false      disable the ping
- *   KEEP_ALIVE_MINUTES=10 interval (default 10 minutes)
+ * Why not a cron-job.org / GitHub Actions ping?
+ *   - That's a fine alternative, but self-pinging means there's
+ *     nothing to forget to renew or rotate. One env var (already set
+ *     by Render) is all it takes.
  */
+const PING_PATH       = '/api/_health';
+const PING_INTERVAL_MS = 14 * 60 * 1000;   // 14 minutes
 
-function resolveTarget(port) {
-  if (process.env.PING_URL) {
-    return process.env.PING_URL.replace(/\/$/, '');
-  }
-  if (process.env.RENDER_EXTERNAL_URL) {
-    return process.env.RENDER_EXTERNAL_URL.replace(/\/$/, '');
-  }
-  return `http://localhost:${port}`;
-}
-
-/**
- * Start the keep-alive interval.
- * @param {number} port - The port the API is listening on (for local fallback).
- */
-function startKeepAlive(port = 8000) {
-  if (process.env.KEEP_ALIVE === 'false') {
-    console.log('[keepAlive] disabled via KEEP_ALIVE=false');
+function start() {
+  const url = (process.env.RENDER_EXTERNAL_URL || process.env.KEEP_ALIVE_URL || '').trim();
+  if (!url) {
+    console.log('[keepAlive] No RENDER_EXTERNAL_URL set — self-ping disabled.');
     return;
   }
-  if (typeof fetch !== 'function') {
-    console.warn('[keepAlive] global fetch not available (Node <18) — skipping');
-    return;
-  }
-
-  const base        = resolveTarget(port);
-  const selfTarget  = `${base}/`;
-  const mobileBase  = (process.env.MOBILE_API_URL || '').replace(/\/+$/, '');
-  // We ping the mobile backend's /api/health (cheap, ungated) so it
-  // doesn't go to sleep either. That removes the 30-second cold-start
-  // the user was seeing on the HRMS complaints / leaves / allowances
-  // pages — the very first hit after idle no longer triggers a wake-up
-  // delay because the mobile backend was kept warm by these pings.
-  const mobileTarget = mobileBase ? `${mobileBase}/api/health` : null;
-  const minutes      = Math.max(1, parseInt(process.env.KEEP_ALIVE_MINUTES, 10) || 10);
-  const intervalMs   = minutes * 60 * 1000;
-
-  console.log(`[keepAlive] scheduled every ${minutes} min → ${selfTarget}`);
-  if (mobileTarget) {
-    console.log(`[keepAlive] also pinging mobile backend → ${mobileTarget}`);
-  } else {
-    console.warn('[keepAlive] MOBILE_API_URL not set — mobile backend will NOT be kept warm');
-  }
-
-  async function pingOne(url) {
-    const startedAt = Date.now();
-    try {
-      const res = await fetch(url, { method: 'GET' });
-      const ms = Date.now() - startedAt;
-      if (res.ok) {
-        console.log(`[keepAlive] ✔ ${res.status} ${url} (${ms}ms)`);
-      } else {
-        console.warn(`[keepAlive] ⚠ ${res.status} ${url} (${ms}ms)`);
-      }
-    } catch (err) {
-      console.warn(`[keepAlive] ✖ ${url} failed: ${err.message}`);
-    }
-  }
-
+  const target = url.replace(/\/$/, '') + PING_PATH;
   const ping = async () => {
-    // Hit both targets in parallel so a slow one doesn't block the other.
-    await Promise.all([
-      pingOne(selfTarget),
-      mobileTarget ? pingOne(mobileTarget) : Promise.resolve(),
-    ]);
+    try {
+      const res = await fetch(target);
+      console.log(`[keepAlive] ping ${target} → ${res.status} @ ${new Date().toISOString()}`);
+    } catch (err) {
+      console.warn('[keepAlive] ping failed:', err.message);
+    }
   };
-
-  // Fire one ping ~5s after startup (was 30s) so the mobile backend wakes
-  // up BEFORE the HRMS admin actually clicks Complaints / Leave / etc.
-  setTimeout(ping, 5_000);
-  setInterval(ping, intervalMs);
+  // Initial delay so we don't ping ourselves during boot.
+  setTimeout(() => {
+    ping();
+    setInterval(ping, PING_INTERVAL_MS);
+  }, 60_000);
+  console.log(`[keepAlive] ✓ self-ping enabled — every ${PING_INTERVAL_MS / 60000} min → ${target}`);
 }
 
-module.exports = { startKeepAlive };
+module.exports = { start };

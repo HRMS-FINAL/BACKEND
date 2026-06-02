@@ -102,6 +102,9 @@ app.get('/', (req, res) => {
 // If totalAll > 0 but visibleActive is 0, a soft-delete migration hid them.
 // If both are high but the frontend shows zero, the issue is on the
 // frontend / proxy side, not the DB.
+// Health probe — used by the keepAlive self-ping (see keepAlive.js).
+app.get('/api/_health', (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+
 app.get('/api/_diag', async (req, res) => {
   const mongoose = require('mongoose');
   const out = {
