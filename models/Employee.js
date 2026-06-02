@@ -55,6 +55,13 @@ const employeeSchema = new mongoose.Schema(
     // executive heads) have no manager above them, and Add Employee
     // needs to accept those rows too.
     assignedTo:     { type: String, default: '', trim: true },
+    // Per-employee petrol-allowance opt-in (Jun 2026 HR brief). When
+    // true, the petrol auto-bill computes amount = (GPS km on the day)
+    // × ₹3.50 between check-in and check-out, and writes one allowance
+    // row per workday. When false, this employee can't claim petrol.
+    // Stays `undefined` for legacy rows so the department/name rules in
+    // petrolGpsAllowlist.js still take effect until HR explicitly sets it.
+    petrolEligible: { type: Boolean, default: undefined },
     education:      { type: educationSchema, required: true },
     status:         { type: String, enum: ['Active', 'Inactive', 'On Leave', 'Terminated'], default: 'Active' },
     isActive:       { type: Boolean, default: true },
