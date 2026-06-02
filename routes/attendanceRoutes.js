@@ -518,6 +518,10 @@ router.get('/attendance-requests', async (req, res) => {
     }
     const items = Array.isArray(data?.items) ? data.items : [];
     // Reshape the mongoose-populated user into a flat row HR can render.
+    // managerStatus (Jun 2026) lets the HR table show whether the
+    // manager has weighed in yet — '' means Awaiting Manager (HR can
+    // see it but typically waits for manager), 'Approved' means HR can
+    // now finalize, 'Rejected' means the request is already closed.
     const out = items.map((it) => ({
       _id:        it._id,
       id:         it.user?.employeeId || String(it._id).slice(-6),
@@ -528,6 +532,10 @@ router.get('/attendance-requests', async (req, res) => {
       hrComment:  it.hrComment || '',
       reviewedAt: it.reviewedAt || null,
       reviewedBy: it.reviewedBy || '',
+      managerStatus:   it.managerStatus   || '',
+      managerStatusBy: it.managerStatusBy || '',
+      managerStatusAt: it.managerStatusAt || null,
+      managerComment:  it.managerComment  || '',
       createdAt:  it.createdAt,
       employeeId: it.user?.employeeId || '',
       employeeName:
