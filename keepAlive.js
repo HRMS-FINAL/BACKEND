@@ -1,28 +1,24 @@
 /**
- * Keep-alive self-pinger
- * ─────────────────────────────────────────────────────────────────────
+ * Keep-alive self-pinger.
+ *
  * Render's free tier suspends a web service after ~15 min of zero
- * inbound HTTP traffic and takes 30-60 s to spin back up. That cold
- * start lands on the user when they hit the app first thing in the
- * morning, which feels broken.
+ * inbound HTTP traffic and takes 30-60 s to spin back up. To prevent
+ * the cold-start hitting the first morning user, this pings the
+ * service's own /api/_health every 14 min so the dyno stays warm 24/7.
  *
- * This module hits the service's own `/api/_health` endpoint every
- * 14 minutes (just under Render's idle timeout) so the dyno stays
- * warm 24/7. We use the `RENDER_EXTERNAL_URL` env var Render injects
- * automatically; if it's missing (local dev) the pinger is a no-op.
- *
- * Why not a cron-job.org / GitHub Actions ping?
- *   - That's a fine alternative, but self-pinging means there's
- *     nothing to forget to renew or rotate. One env var (already set
- *     by Render) is all it takes.
+ * URL resolution order:
+ *   1. RENDER_EXTERNAL_URL (auto-set by Render)
+ *   2. KEEP_ALIVE_URL      (manual override)
+ *   3. http://localhost:<port>  (passed in by app.listen callback)
  */
 const PING_PATH       = '/api/_health';
-const PING_INTERVAL_MS = 14 * 60 * 1000;   // 14 minutes
+const PING_INTERVAL_MS = 14 * 60 * 1000;
 
-function start() {
-  const url = (process.env.RENDER_EXTERNAL_URL || process.env.KEEP_ALIVE_URL || '').trim();
+function startKeepAlive(port) {
+  const explicit = (process.env.RENDER_EXTERNAL_URL || process.env.KEEP_ALIVE_URL || '').trim();
+  const url = explicit || (port ? `http://localhost:${port}` : '');
   if (!url) {
-    console.log('[keepAlive] No RENDER_EXTERNAL_URL set — self-ping disabled.');
+    console.log('[keepAlive] No RENDER_EXTERNAL_URL / KEEP_ALIVE_URL / port — self-ping disabled.');
     return;
   }
   const target = url.replace(/\/$/, '') + PING_PATH;
@@ -34,12 +30,10 @@ function start() {
       console.warn('[keepAlive] ping failed:', err.message);
     }
   };
-  // Initial delay so we don't ping ourselves during boot.
-  setTimeout(() => {
-    ping();
-    setInterval(ping, PING_INTERVAL_MS);
-  }, 60_000);
-  console.log(`[keepAlive] ✓ self-ping enabled — every ${PING_INTERVAL_MS / 60000} min → ${target}`);
+  setTimeout(() => { ping(); setInterval(ping, PING_INTERVAL_MS); }, 60_000);
+  console.log(`[keepAlive] ✓ self-ping every ${PING_INTERVAL_MS / 60000} min → ${target}`);
 }
 
-module.exports = { start };
+const start = startKeepAlive;
+
+module.exports = { start, startKeepAlive };
