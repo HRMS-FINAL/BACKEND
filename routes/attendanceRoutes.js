@@ -491,4 +491,80 @@ router.delete('/leaves/:id', async (req, res) => {
   }
 });
 
+
+
+// ───────────────────────────────────────────────────────────────────
+// ATTENDANCE REGULARISATION REQUESTS (proxy → mobile backend)
+// ───────────────────────────────────────────────────────────────────
+//
+// HR pages this under "Attendance Requests" and acts on the rows from
+// HRMS. The mobile backend owns the AttendanceRequest collection, so
+// we just forward + return what it sends back.
+
+// GET /api/attendance-requests?status=pending|approved|rejected|expired
+router.get('/attendance-requests', async (req, res) => {
+  if (!ADMIN_SECRET) {
+    return res.status(503).json({ success: false, message: 'MOBILE_ADMIN_SECRET is not configured.' });
+  }
+  try {
+    const q = new URLSearchParams();
+    if (req.query.status) q.set('status', String(req.query.status));
+    if (req.query.limit)  q.set('limit',  String(req.query.limit));
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    const r  = await fwdMobile(`/api/attendance/admin/requests${qs}`);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      return res.status(r.status).json({ success: false, message: data?.message || `Mobile API responded ${r.status}` });
+    }
+    const items = Array.isArray(data?.items) ? data.items : [];
+    // Reshape the mongoose-populated user into a flat row HR can render.
+    const out = items.map((it) => ({
+      _id:        it._id,
+      id:         it.user?.employeeId || String(it._id).slice(-6),
+      date:       it.date,
+      requestType:it.requestType || 'regularize',
+      reason:     it.reason || '',
+      status:     it.status || 'pending',
+      hrComment:  it.hrComment || '',
+      reviewedAt: it.reviewedAt || null,
+      reviewedBy: it.reviewedBy || '',
+      createdAt:  it.createdAt,
+      employeeId: it.user?.employeeId || '',
+      employeeName:
+        it.user?.name ||
+        ((it.user?.firstName || '') + ' ' + (it.user?.lastName || '')).trim() ||
+        '—',
+      email:      it.user?.email || '',
+      designation:it.user?.designationTitle || it.user?.designation || '',
+      department: it.user?.departmentName  || it.user?.department  || '',
+    }));
+    res.json({ success: true, items: out });
+  } catch (err) {
+    console.error('[attendance-requests proxy GET]', err.message);
+    res.status(502).json({ success: false, message: 'Could not reach the mobile backend. ' + err.message });
+  }
+});
+
+// PATCH /api/attendance-requests/:id  { status, hrComment?, reviewedBy? }
+router.patch('/attendance-requests/:id', async (req, res) => {
+  if (!ADMIN_SECRET) {
+    return res.status(503).json({ success: false, message: 'MOBILE_ADMIN_SECRET is not configured.' });
+  }
+  try {
+    const r = await fetch(`${MOBILE_API}/api/attendance/admin/requests/${encodeURIComponent(req.params.id)}`, {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json', 'x-admin-secret': ADMIN_SECRET },
+      body:    JSON.stringify(req.body || {}),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      return res.status(r.status).json({ success: false, message: data?.message || `Mobile API responded ${r.status}` });
+    }
+    res.json({ success: true, item: data.item });
+  } catch (err) {
+    console.error('[attendance-requests proxy PATCH]', err.message);
+    res.status(502).json({ success: false, message: 'Could not reach the mobile backend. ' + err.message });
+  }
+});
+
 module.exports = router;
