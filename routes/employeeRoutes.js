@@ -405,6 +405,12 @@ router.post('/', async (req, res) => {
       joiningDate:    b.joiningDate,
       salary:         Number(b.salary) || 0,
       assignedTo:     b.assignedTo,
+      // Petrol allowance opt-in (Jun 2026). MUST be passed through to
+      // the Employee doc so the mobile backend's auto-bill cron sees
+      // the flag — without this the New Employee form's toggle was
+      // silently dropped, which is why PETROL TEST never got a row in
+      // the allowances collection even though HR ticked his box.
+      ...(typeof b.petrolEligible === 'boolean' ? { petrolEligible: b.petrolEligible } : {}),
       education:      b.education || { degree: b.degree || '', university: b.university || '', fieldOfStudy: b.fieldOfStudy || '', graduationYear: Number(b.graduationYear) || 2020 },
       // Personal fields — sent by the HRMS New Employee form, kept on the
       // employee record so the mobile profile screen can render them
