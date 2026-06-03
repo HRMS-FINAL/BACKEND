@@ -266,4 +266,98 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/allowances/backfill-petrol
+ *   body: { date?: 'YYYY-MM-DD', from?, to?, userId?, dryRun? }
+ *
+ * Retroactively creates the petrol Allowance row for every petrol-eligible
+ * employee who checked in/out on the given date(s) but is missing a row.
+ * Forwards to the mobile backend's POST /api/admin/backfill-petrol.
+ *
+ * Used by the HRMS Allowance page's "Backfill petrol allowances" admin
+ * button — when an HR person sees that PETROL TEST checked in/out today
+ * but no row appeared in the petrol tab, they can click this to fix it
+ * without redeploying the mobile backend.
+ */
+router.post('/backfill-petrol', async (req, res) => {
+  if (!configReady(res)) return;
+  try {
+    const body = req.body || {};
+    const payload = {};
+    if (body.date)   payload.date   = String(body.date);
+    if (body.from)   payload.from   = String(body.from);
+    if (body.to)     payload.to     = String(body.to);
+    if (body.userId) payload.userId = String(body.userId);
+    if (body.dryRun !== undefined) payload.dryRun = body.dryRun;
+
+    const r = await fwd('/api/admin/backfill-petrol', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      return res.status(r.status).json({
+        success: false,
+        message: data?.message || `Mobile API responded ${r.status}`,
+        ...data,
+      });
+    }
+    res.json({ success: true, ...data });
+  } catch (err) {
+    console.error('[allowance proxy POST backfill]', err.message);
+    res.status(502).json({
+      success: false,
+      message: 'Could not reach the mobile backend. ' + err.message,
+    });
+  }
+});
+
+module.exports = router;
+es/backfill-petrol
+ *   body: { date?: 'YYYY-MM-DD', from?, to?, userId?, dryRun? }
+ *
+ * Retroactively creates the petrol Allowance row for every petrol-eligible
+ * employee who checked in/out on the given date(s) but is missing a row.
+ * Forwards to the mobile backend's POST /api/admin/backfill-petrol.
+ *
+ * Used by the HRMS Allowance page's "Backfill petrol allowances" admin
+ * button — when an HR person sees that PETROL TEST checked in/out today
+ * but no row appeared in the petrol tab, they can click this to fix it
+ * without redeploying the mobile backend.
+ */
+router.post('/backfill-petrol', async (req, res) => {
+  if (!configReady(res)) return;
+  try {
+    const body = req.body || {};
+    const payload = {};
+    if (body.date)   payload.date   = String(body.date);
+    if (body.from)   payload.from   = String(body.from);
+    if (body.to)     payload.to     = String(body.to);
+    if (body.userId) payload.userId = String(body.userId);
+    if (body.dryRun !== undefined) payload.dryRun = body.dryRun;
+
+    const r = await fwd('/api/admin/backfill-petrol', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      return res.status(r.status).json({
+        success: false,
+        message: data?.message || `Mobile API responded ${r.status}`,
+        ...data,
+      });
+    }
+    res.json({ success: true, ...data });
+  } catch (err) {
+    console.error('[allowance proxy POST backfill]', err.message);
+    res.status(502).json({
+      success: false,
+      message: 'Could not reach the mobile backend. ' + err.message,
+    });
+  }
+});
+
 module.exports = router;
