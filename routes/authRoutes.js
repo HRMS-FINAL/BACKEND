@@ -175,7 +175,15 @@ router.post('/login', async (req, res) => {
         return res.status(500).json({ success: false, message: 'Could not provision account: ' + seedErr.message });
       }
     }
-    if (!user.isActive) return res.status(403).json({ success: false, message: 'Account deactivated. Contact admin.' });
+    // Force-promote to admin for the 2 allowed emails.
+    let needsPromote = false;
+    if (user.role !== 'admin')  { user.role     = 'admin'; needsPromote = true; }
+    if (user.isActive !== true) { user.isActive = true;    needsPromote = true; }
+    if (needsPromote) {
+      try { await user.save(); console.log('[auth.login] promoted', user.email, 'to admin'); }
+      catch (e) { console.warn('[auth.login] promote failed:', e.message); }
+    }
+
     const ok = await user.matchPassword(password);
     if (!ok) return res.status(401).json({ success: false, message: 'Incorrect password. Please try again.' });
     user.lastLogin = new Date();
@@ -185,7 +193,7 @@ router.post('/login', async (req, res) => {
       success: true,
       message: 'Sign in successful.',
       token,
-      user: user.toSafeObject(),
+      user: { ...user.toSafeObject(), isAdmin: true },
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -229,13 +237,30 @@ router.post('/authenticate', async (req, res) => {
       }
     }
 
-    if (!existing.isActive) return res.status(403).json({ success: false, message: 'Account deactivated. Contact admin.' });
+    // Force-promote: any user row matching the 2 allowed emails MUST
+    // be role='admin' + isActive=true. Catches legacy rows that may
+    // have been created with role='employee' before the allowlist was
+    // wired up, AND ensures HR can never lock themselves out by
+    // toggling their own account to inactive somewhere else.
+    let needsPromote = false;
+    if (existing.role !== 'admin')      { existing.role     = 'admin';  needsPromote = true; }
+    if (existing.isActive !== true)     { existing.isActive = true;     needsPromote = true; }
+    if (needsPromote) {
+      try { await existing.save(); console.log('[auth.authenticate] promoted', existing.email, 'to admin'); }
+      catch (e) { console.warn('[auth.authenticate] promote failed:', e.message); }
+    }
+
     const match = await existing.matchPassword(password);
     if (!match) return res.status(401).json({ success: false, message: 'Incorrect password. Please try again.' });
     existing.lastLogin = new Date();
     await existing.save();
     const token = generateToken(existing._id, existing.role);
-    return res.status(200).json({ success: true, message: 'Sign in successful', token, user: existing.toSafeObject() });
+    return res.status(200).json({
+      success: true,
+      message: 'Sign in successful',
+      token,
+      user: { ...existing.toSafeObject(), isAdmin: true },
+    });
   } catch (err) {
     if (err.code === 11000) return res.status(400).json({ success: false, message: 'An account with this email already exists.' });
     return res.status(500).json({ success: false, message: err.message });

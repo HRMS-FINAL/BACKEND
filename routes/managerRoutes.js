@@ -79,24 +79,61 @@ router.post('/', async (req, res) => {
       }
     );
 
-    // Side effect: if the email matches an Employee row, grant manager
-    // access by flipping role='manager'. This is how the ERM Web manager
-    // routes know to let them in.
-    let promoted = false;
-    if (doc.email) {
-      try {
-        const updated = await Employee.findOneAndUpdate(
-          { email: doc.email },
-          { $set: { role: 'manager' } },
+    // Side effect: grant ERM Web manager access by flipping the matching
+    // Employee row's role to 'manager'. Two-pass lookup:
+    //   1. exact email match (if email was provided)
+    //   2. case-insensitive full-name match against firstName + lastName
+    //      or the legacy `name` field
+    // We also force isActive=true so a dormant account is signed-in-ready.
+    let promoted    = false;
+    let promotedRef = '';
+    try {
+      const updates = { role: 'manager', isActive: true };
+
+      // Pass 1: by email
+      let updated = null;
+      if (doc.email) {
+        updated = await Employee.findOneAndUpdate(
+          { email: String(doc.email).toLowerCase().trim() },
+          { $set: updates },
           { new: true }
         );
-        if (updated) promoted = true;
-      } catch (e) {
-        console.warn('[managers.create] role promotion failed:', e.message);
       }
+
+      // Pass 2: by case-insensitive name. Match against either the
+      // `firstName + ' ' + lastName` concatenation OR the legacy `name`
+      // field. Escape regex specials in the manager's name first.
+      if (!updated && doc.name) {
+        const safe = String(doc.name).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const nameRx = new RegExp(`^\\s*${safe}\\s*$`, 'i');
+        updated = await Employee.findOneAndUpdate(
+          { $or: [
+              { name: nameRx },
+              { $expr: { $regexMatch: {
+                input: { $trim: { input: { $concat: [
+                  { $ifNull: ['$firstName', ''] }, ' ', { $ifNull: ['$lastName', ''] },
+                ] } } },
+                regex: nameRx,
+              } } },
+            ],
+          },
+          { $set: updates },
+          { new: true }
+        );
+      }
+
+      if (updated) {
+        promoted = true;
+        promotedRef = updated.email || updated.name || String(updated._id);
+        console.log('[managers.create] promoted', promotedRef, 'to role=manager');
+      } else {
+        console.log('[managers.create] no employee match for', doc.name, doc.email || '(no email)');
+      }
+    } catch (e) {
+      console.warn('[managers.create] role promotion failed:', e.message);
     }
 
-    res.status(201).json({ success: true, data: doc, promoted });
+    res.status(201).json({ success: true, data: doc, promoted, promotedRef });
   } catch (err) {
     if (err.code === 11000) {
       return res.status(400).json({ success: false, message: 'A manager with this name already exists' });
