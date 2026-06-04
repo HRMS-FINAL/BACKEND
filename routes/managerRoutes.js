@@ -100,26 +100,27 @@ router.post('/', async (req, res) => {
         );
       }
 
-      // Pass 2: by case-insensitive name. Match against either the
-      // `firstName + ' ' + lastName` concatenation OR the legacy `name`
-      // field. Escape regex specials in the manager's name first.
+      // Pass 2: by case-insensitive name. HRMS Employee model has no
+      // `name` field — only firstName + lastName — and $expr regex
+      // matching is fragile across mongoose versions. Do the match in
+      // JS: pull a slim candidate set and find by full-name equality.
       if (!updated && doc.name) {
-        const safe = String(doc.name).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const nameRx = new RegExp(`^\\s*${safe}\\s*$`, 'i');
-        updated = await Employee.findOneAndUpdate(
-          { $or: [
-              { name: nameRx },
-              { $expr: { $regexMatch: {
-                input: { $trim: { input: { $concat: [
-                  { $ifNull: ['$firstName', ''] }, ' ', { $ifNull: ['$lastName', ''] },
-                ] } } },
-                regex: nameRx,
-              } } },
-            ],
-          },
-          { $set: updates },
-          { new: true }
-        );
+        const wanted = String(doc.name).trim().toLowerCase();
+        const candidates = await Employee
+          .find({})
+          .select('_id firstName lastName email')
+          .lean();
+        const hit = candidates.find((e) => {
+          const full = [e.firstName || '', e.lastName || ''].filter(Boolean).join(' ').trim().toLowerCase();
+          return full === wanted;
+        });
+        if (hit) {
+          updated = await Employee.findByIdAndUpdate(
+            hit._id,
+            { $set: updates },
+            { new: true }
+          );
+        }
       }
 
       if (updated) {
@@ -165,18 +166,33 @@ router.delete('/:id', async (req, res) => {
     //      edit + Department create stops listing them automatically.
     const cleanup = { demoted: 0, unassigned: 0 };
     try {
-      // Build a case-insensitive name regex for the demotion + reassign
-      // lookups. Name match catches seeded directory rows (Vimal Kumar,
-      // Saleem, etc.) which don't carry an email.
+      const wantedName = String(doc.name || '').trim().toLowerCase();
       const nameRx = new RegExp(`^${String(doc.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').trim()}$`, 'i');
 
-      // 1. Demote — by email if we have it, else by name.
+      // 1. Demote — by email if we have it, else by JS-side name match
+      //    against firstName + lastName.
       try {
-        const filter = doc.email
-          ? { $or: [{ email: String(doc.email).toLowerCase() }, { name: nameRx }], role: 'manager' }
-          : { name: nameRx, role: 'manager' };
-        const r = await Employee.updateMany(filter, { $set: { role: 'employee' } });
-        cleanup.demoted = r.modifiedCount || 0;
+        if (doc.email) {
+          const r = await Employee.updateMany(
+            { email: String(doc.email).toLowerCase(), role: 'manager' },
+            { $set: { role: 'employee' } }
+          );
+          cleanup.demoted += r.modifiedCount || 0;
+        }
+        if (wantedName) {
+          const candidates = await Employee.find({ role: 'manager' }).select('_id firstName lastName').lean();
+          const matches = candidates.filter((e) => {
+            const full = [e.firstName || '', e.lastName || ''].filter(Boolean).join(' ').trim().toLowerCase();
+            return full === wantedName;
+          });
+          if (matches.length > 0) {
+            const r = await Employee.updateMany(
+              { _id: { $in: matches.map((m) => m._id) } },
+              { $set: { role: 'employee' } }
+            );
+            cleanup.demoted += r.modifiedCount || 0;
+          }
+        }
       } catch (e) {
         console.warn('[managers.delete] role demote failed:', e.message);
       }
