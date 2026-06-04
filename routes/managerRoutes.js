@@ -114,17 +114,53 @@ router.delete('/:id', async (req, res) => {
     );
     if (!doc) return res.status(404).json({ success: false, message: 'Manager not found' });
 
-    // If this manager was tied to an Employee record by email, demote
-    // them back to 'employee'. Manager access in ERM Web drops on the
-    // next sign-in / token refresh.
-    if (doc.email) {
+    // ── Cascade cleanup ────────────────────────────────────────────────
+    // Once a manager is removed from the directory the rest of the app
+    // must catch up automatically. Three side effects:
+    //   1. Demote any employee with matching email or name from
+    //      role='manager' → 'employee'. They lose ERM Web manager
+    //      access on next sign-in / token refresh.
+    //   2. Clear assignedTo on every employee currently reporting to
+    //      this manager so the Assigned-To column doesn't show a
+    //      stranded reference.
+    //   3. (Implicit) the /api/managers GET no longer returns this row
+    //      so the Assigned-To dropdown on Add Employee + Employee List
+    //      edit + Department create stops listing them automatically.
+    const cleanup = { demoted: 0, unassigned: 0 };
+    try {
+      // Build a case-insensitive name regex for the demotion + reassign
+      // lookups. Name match catches seeded directory rows (Vimal Kumar,
+      // Saleem, etc.) which don't carry an email.
+      const nameRx = new RegExp(`^${String(doc.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').trim()}$`, 'i');
+
+      // 1. Demote — by email if we have it, else by name.
       try {
-        await Employee.updateOne({ email: doc.email, role: 'manager' }, { $set: { role: 'employee' } });
+        const filter = doc.email
+          ? { $or: [{ email: String(doc.email).toLowerCase() }, { name: nameRx }], role: 'manager' }
+          : { name: nameRx, role: 'manager' };
+        const r = await Employee.updateMany(filter, { $set: { role: 'employee' } });
+        cleanup.demoted = r.modifiedCount || 0;
       } catch (e) {
         console.warn('[managers.delete] role demote failed:', e.message);
       }
+
+      // 2. Clear assignedTo on everyone currently reporting to them.
+      try {
+        const r = await Employee.updateMany(
+          { assignedTo: nameRx },
+          { $set: { assignedTo: '' } }
+        );
+        cleanup.unassigned = r.modifiedCount || 0;
+      } catch (e) {
+        console.warn('[managers.delete] assignedTo clear failed:', e.message);
+      }
+
+      console.log(`[managers.delete] cleanup for ${doc.name}: demoted=${cleanup.demoted}, unassigned=${cleanup.unassigned}`);
+    } catch (e) {
+      console.warn('[managers.delete] cascade failed:', e.message);
     }
-    res.json({ success: true, data: doc });
+
+    res.json({ success: true, data: doc, cleanup });
   } catch (err) {
     if (err.name === 'CastError') return res.status(400).json({ success: false, message: 'Invalid manager id' });
     res.status(500).json({ success: false, message: err.message });
