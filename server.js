@@ -207,6 +207,7 @@ app.use('/api/auth',              require('./routes/authRoutes'));
 app.use('/api/dashboard',         require('./routes/dashboardRoutes'));
 app.use('/api/departments',       require('./routes/departmentRoutes'));
 app.use('/api/designations',      require('./routes/designationRoutes'));
+app.use('/api/managers',          require('./routes/managerRoutes'));
 app.use('/api/employees',         require('./routes/employeeRoutes'));
 app.use('/api/attendance',        require('./routes/attendanceRoutes'));
 app.use('/api/reports',           require('./routes/reportRoutes'));
