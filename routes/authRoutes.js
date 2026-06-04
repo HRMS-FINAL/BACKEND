@@ -151,8 +151,30 @@ router.post('/login', async (req, res) => {
     if (!isAllowed(email)) {
       return res.status(403).json({ success: false, message: 'This email is not authorised to access HRMS.' });
     }
-    const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
-    if (!user) return res.status(401).json({ success: false, message: 'Account not yet provisioned. Contact your administrator.' });
+    let user = await User.findOne({ email: email.toLowerCase() }).select('+password');
+
+    // Self-heal — if the seed didn't run (cold start, missed timeout,
+    // fresh Render DB) we provision the allowlisted account on the
+    // fly using the default ADMINTESCO password. HR can still change
+    // it later via Forgot Password → OTP → New Password.
+    if (!user) {
+      try {
+        const seedEmail = email.toLowerCase().trim();
+        const created = await User.create({
+          name:  seedEmail === 'hr@tescostructures.in' ? 'HR Admin' : 'Tesco Structures',
+          email: seedEmail,
+          password: SEED_PASSWORD,
+          role:  'admin',
+          isActive: true,
+        });
+        // Re-read with password select so matchPassword works below.
+        user = await User.findById(created._id).select('+password');
+        console.log('[auth.login] self-healed seed for', seedEmail);
+      } catch (seedErr) {
+        console.error('[auth.login] self-heal failed:', seedErr.message);
+        return res.status(500).json({ success: false, message: 'Could not provision account: ' + seedErr.message });
+      }
+    }
     if (!user.isActive) return res.status(403).json({ success: false, message: 'Account deactivated. Contact admin.' });
     const ok = await user.matchPassword(password);
     if (!ok) return res.status(401).json({ success: false, message: 'Incorrect password. Please try again.' });
@@ -170,31 +192,50 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// POST /api/auth/authenticate — legacy smart sign-in/sign-up wrapper
+// POST /api/auth/authenticate — legacy smart sign-in wrapper.
+// Locked Jun 2026: HRMS access is restricted to the two seeded
+// admin accounts, and signup is disabled. The endpoint is now:
+//   • email not in allowlist → 403
+//   • email allowlisted, no user yet → SELF-HEAL by creating the
+//     account with ADMINTESCO (so a fresh Render deploy doesn't
+//     lock HR out if the boot-time seed missed)
+//   • email allowlisted, user exists → normal password check
 router.post('/authenticate', async (req, res) => {
   try {
-    const { email, password, name, role, phone } = req.body;
+    const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ success: false, message: 'Email and password are required' });
-
-    const existing = await User.findOne({ email: email.toLowerCase() }).select('+password');
-
-    if (existing) {
-      if (name) {
-        return res.status(400).json({ success: false, message: 'An account with this email already exists. Please sign in instead.' });
-      }
-      if (!existing.isActive) return res.status(403).json({ success: false, message: 'Account deactivated. Contact admin.' });
-      const match = await existing.matchPassword(password);
-      if (!match) return res.status(401).json({ success: false, message: 'Incorrect password. Please try again.' });
-      existing.lastLogin = new Date();
-      await existing.save();
-      const token = generateToken(existing._id, existing.role);
-      return res.status(200).json({ success: true, message: 'Sign in successful', token, user: existing.toSafeObject() });
+    if (!isAllowed(email)) {
+      return res.status(403).json({ success: false, message: 'This email is not authorised to access HRMS.' });
     }
 
-    if (!name) return res.status(400).json({ success: false, message: 'No account found with this email. Please sign up first.' });
-    const newUser = await User.create({ name: name.trim(), email: email.toLowerCase(), password, role: role || 'employee', phone: phone || '' });
-    const token   = generateToken(newUser._id, newUser.role);
-    return res.status(201).json({ success: true, message: 'Account created successfully', token, user: newUser.toSafeObject() });
+    let existing = await User.findOne({ email: email.toLowerCase() }).select('+password');
+
+    // Self-heal — provision the allowlisted account on the fly.
+    if (!existing) {
+      try {
+        const seedEmail = email.toLowerCase().trim();
+        const created = await User.create({
+          name:  seedEmail === 'hr@tescostructures.in' ? 'HR Admin' : 'Tesco Structures',
+          email: seedEmail,
+          password: SEED_PASSWORD,
+          role:  'admin',
+          isActive: true,
+        });
+        existing = await User.findById(created._id).select('+password');
+        console.log('[auth.authenticate] self-healed seed for', seedEmail);
+      } catch (seedErr) {
+        console.error('[auth.authenticate] self-heal failed:', seedErr.message);
+        return res.status(500).json({ success: false, message: 'Could not provision account: ' + seedErr.message });
+      }
+    }
+
+    if (!existing.isActive) return res.status(403).json({ success: false, message: 'Account deactivated. Contact admin.' });
+    const match = await existing.matchPassword(password);
+    if (!match) return res.status(401).json({ success: false, message: 'Incorrect password. Please try again.' });
+    existing.lastLogin = new Date();
+    await existing.save();
+    const token = generateToken(existing._id, existing.role);
+    return res.status(200).json({ success: true, message: 'Sign in successful', token, user: existing.toSafeObject() });
   } catch (err) {
     if (err.code === 11000) return res.status(400).json({ success: false, message: 'An account with this email already exists.' });
     return res.status(500).json({ success: false, message: err.message });
@@ -209,9 +250,24 @@ router.post('/send-otp', async (req, res) => {
     if (!isAllowed(email)) {
       return res.status(403).json({ success: false, message: 'This email is not authorised to access HRMS.' });
     }
-    const user = await User.findOne({ email: email.toLowerCase() });
+    let user = await User.findOne({ email: email.toLowerCase() });
+    // Self-heal — same as login. Don't 404 the OTP flow when the
+    // boot-time seed missed; provision the account silently first.
     if (!user) {
-      return res.status(404).json({ success: false, message: 'Account not yet provisioned. Contact your administrator.' });
+      try {
+        const seedEmail = email.toLowerCase().trim();
+        const created = await User.create({
+          name:  seedEmail === 'hr@tescostructures.in' ? 'HR Admin' : 'Tesco Structures',
+          email: seedEmail,
+          password: SEED_PASSWORD,
+          role:  'admin',
+          isActive: true,
+        });
+        user = await User.findById(created._id);
+        console.log('[auth.send-otp] self-healed seed for', seedEmail);
+      } catch (seedErr) {
+        return res.status(500).json({ success: false, message: 'Could not provision account: ' + seedErr.message });
+      }
     }
     const otp = genOtp();
     user.otp        = otp;
