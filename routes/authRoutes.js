@@ -20,20 +20,79 @@ const { sendOtpEmail } = require('../utils/emailService');
 
 const OTP_TTL_MS = 10 * 60 * 1000;  // 10 min
 
+// ── HRMS access policy (Jun 2026) ───────────────────────────────────────
+// HRMS login is now restricted to exactly these two HR / admin accounts.
+// Anyone else hitting /login, /send-otp, /reset-password gets 403. Self-
+// service signup has been removed — there is no /register UI anymore.
+// Both seed accounts are created at boot with the default ADMINTESCO
+// password; HR can change it via Forgot Password → OTP → New Password.
+const ALLOWED_EMAILS = [
+  'tescostructures@gmail.com',
+  'hr@tescostructures.in',
+];
+const SEED_PASSWORD = 'ADMINTESCO';
+
+function isAllowed(email) {
+  return ALLOWED_EMAILS.includes(String(email || '').toLowerCase().trim());
+}
+
+// One-shot: ensure both whitelisted accounts exist + are active. Called
+// once on require() so the very first /login attempt after a fresh deploy
+// already has a user document to authenticate against.
+async function seedHrmsAccounts() {
+  try {
+    for (const email of ALLOWED_EMAILS) {
+      const existing = await User.findOne({ email });
+      if (existing) {
+        // Make sure they stay active even if HR was deactivated by mistake.
+        if (!existing.isActive) {
+          existing.isActive = true;
+          await existing.save();
+        }
+        // Optional admin escape hatch — set SEED_RESET_PWD=1 on the
+        // backend env once if HR locks themselves out, then unset.
+        if (/^(1|true|yes)$/i.test(process.env.SEED_RESET_PWD || '')) {
+          existing.password = SEED_PASSWORD;
+          await existing.save();
+          console.log('[auth.seed] reset password for', email);
+        }
+        continue;
+      }
+      await User.create({
+        name:  email === 'hr@tescostructures.in' ? 'HR Admin' : 'Tesco Structures',
+        email,
+        password: SEED_PASSWORD,
+        role:  'admin',
+        isActive: true,
+      });
+      console.log('[auth.seed] created HRMS account', email);
+    }
+  } catch (e) {
+    console.warn('[auth.seed] failed:', e.message);
+  }
+}
+// Best-effort — fires after Mongo is connected (the app boots before
+// connection completes, so we wait one tick).
+setTimeout(seedHrmsAccounts, 3000);
+
+
 function genOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-// POST /api/auth/check-email
+// POST /api/auth/check-email — only allowlisted HR / admin emails respond.
 router.post('/check-email', async (req, res) => {
   try {
     const { email } = req.body;
     if (!email) return res.status(400).json({ success: false, message: 'Email is required' });
+    if (!isAllowed(email)) {
+      return res.status(403).json({ success: false, message: 'This email is not authorised to access HRMS.' });
+    }
     const user = await User.findOne({ email: email.toLowerCase() }).select('_id name email');
     return res.status(200).json({
       success: true,
       exists: !!user,
-      next: user ? 'signin' : 'signup',
+      next: 'signin',
       user: user ? { name: user.name, email: user.email } : null,
     });
   } catch (err) {
@@ -41,8 +100,15 @@ router.post('/check-email', async (req, res) => {
   }
 });
 
-// POST /api/auth/register — explicit sign-up
+// POST /api/auth/register — DISABLED (Jun 2026). Self-service signup is
+// gone. HRMS access is restricted to the two seeded HR / admin accounts.
 router.post('/register', async (req, res) => {
+  return res.status(403).json({
+    success: false,
+    message: 'Self-service signup is disabled. Contact your administrator for HRMS access.',
+  });
+});
+router.post('/register_DISABLED', async (req, res) => {
   try {
     const { name, email, password, role, phone } = req.body || {};
     if (!name || !email || !password) {
@@ -82,8 +148,11 @@ router.post('/login', async (req, res) => {
     if (!email || !password) {
       return res.status(400).json({ success: false, message: 'Email and password are required.' });
     }
+    if (!isAllowed(email)) {
+      return res.status(403).json({ success: false, message: 'This email is not authorised to access HRMS.' });
+    }
     const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
-    if (!user) return res.status(401).json({ success: false, message: 'No account found with this email. Please sign up first.' });
+    if (!user) return res.status(401).json({ success: false, message: 'Account not yet provisioned. Contact your administrator.' });
     if (!user.isActive) return res.status(403).json({ success: false, message: 'Account deactivated. Contact admin.' });
     const ok = await user.matchPassword(password);
     if (!ok) return res.status(401).json({ success: false, message: 'Incorrect password. Please try again.' });
@@ -137,9 +206,12 @@ router.post('/send-otp', async (req, res) => {
   try {
     const { email } = req.body || {};
     if (!email) return res.status(400).json({ success: false, message: 'Email is required.' });
+    if (!isAllowed(email)) {
+      return res.status(403).json({ success: false, message: 'This email is not authorised to access HRMS.' });
+    }
     const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) {
-      return res.status(404).json({ success: false, message: 'No account found with this email. Please sign up first.' });
+      return res.status(404).json({ success: false, message: 'Account not yet provisioned. Contact your administrator.' });
     }
     const otp = genOtp();
     user.otp        = otp;
