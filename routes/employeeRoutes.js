@@ -469,6 +469,20 @@ router.put('/:id', async (req, res) => {
     delete payload.password;
     Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
 
+    // accessRole on the Employee model is an ObjectId ref. The frontend
+    // 'Convert to Manager' toggle used to send the string 'Manager' for
+    // this field, which made Mongoose throw a CastError that surfaced
+    // as a confusing 'Invalid employee id' to HR. Strip the field unless
+    // it's a valid 24-char ObjectId; the role string field is the
+    // canonical manager / employee flag now.
+    if (payload.accessRole !== undefined && !isObjectId(String(payload.accessRole))) {
+      delete payload.accessRole;
+    }
+    if (payload.role !== undefined) {
+      const r = String(payload.role).toLowerCase().trim();
+      payload.role = ['employee', 'manager', 'hr', 'admin'].includes(r) ? r : 'employee';
+    }
+
     // If admin entered a new password in the edit form, hash and include
     // it in the update. findByIdAndUpdate skips the pre-save hook so we
     // must hash here. Unified-DB means this row IS what the mobile app

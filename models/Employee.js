@@ -66,6 +66,13 @@ const employeeSchema = new mongoose.Schema(
     status:         { type: String, enum: ['Active', 'Inactive', 'On Leave', 'Terminated'], default: 'Active' },
     isActive:       { type: Boolean, default: true },
     accessRole:     { type: mongoose.Schema.Types.ObjectId, ref: 'AccessRole', default: null },
+    // String role used by all 3 apps (HRMS web, ERM Web manager-side,
+    // ERM mobile) to gate manager-only screens. Set via the Employee
+    // List 'Convert to Manager' toggle. Kept alongside accessRole
+    // (ObjectId) because the latter wires into the AccessRole permission
+    // matrix — most rows don't have an AccessRole ObjectId, so role is
+    // the source of truth for the simple manager / employee / hr flag.
+    role:           { type: String, enum: ['employee', 'manager', 'hr', 'admin'], default: 'employee' },
     createdBy:      { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     // Personal info shared with the mobile ERM app (same collection).
     dob:            { type: String, default: '', trim: true },   // ISO date string
