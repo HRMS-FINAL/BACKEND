@@ -13,6 +13,46 @@ const express  = require('express');
 const router   = express.Router();
 const Manager  = require('../models/Manager');
 const Employee = require('../models/Employee');
+const Notification = require('../models/Notification');
+
+// Fire a notification at the converted employee so they see the
+// promotion in their ERM Web + Mobile notification bell. Best-effort —
+// failure must not block the manager-directory create.
+async function notifyPromotion(employee, managerTitle) {
+  if (!employee || !employee._id) return;
+  try {
+    await Notification.create({
+      user:       employee._id,
+      employeeId: employee.employeeId || '',
+      title:      'You have been promoted to Manager',
+      body:       `HR has converted your role to Manager${managerTitle ? ` (${managerTitle})` : ''}. ` +
+                  `The Manager Access section is now visible in ERM Web — once HR assigns subordinates ` +
+                  `to you, their leave / allowance / attendance requests will appear in your Approvals tab.`,
+      type:       'general',
+      link:       '/manager',
+    });
+    console.log('[managers.notify] promotion notif sent to', employee.email || employee._id);
+  } catch (e) {
+    console.warn('[managers.notify] promotion notif failed:', e.message);
+  }
+}
+
+async function notifyDemotion(employee) {
+  if (!employee || !employee._id) return;
+  try {
+    await Notification.create({
+      user:       employee._id,
+      employeeId: employee.employeeId || '',
+      title:      'Manager access removed',
+      body:       'HR has removed your Manager role. The Manager Access section will be hidden on your next sign-in.',
+      type:       'general',
+      link:       '/profile',
+    });
+    console.log('[managers.notify] demotion notif sent to', employee.email || employee._id);
+  } catch (e) {
+    console.warn('[managers.notify] demotion notif failed:', e.message);
+  }
+}
 
 // Seed the 8 canonical names from companyData.js the first time anyone
 // hits the API. Idempotent — uses upsert keyed on name.
@@ -127,6 +167,8 @@ router.post('/', async (req, res) => {
         promoted = true;
         promotedRef = updated.email || updated.name || String(updated._id);
         console.log('[managers.create] promoted', promotedRef, 'to role=manager');
+        // Fire-and-forget: drop a notification in the user's bell.
+        notifyPromotion(updated, String(doc.title || '').trim()).catch(() => {});
       } else {
         console.log('[managers.create] no employee match for', doc.name, doc.email || '(no email)');
       }
@@ -172,15 +214,22 @@ router.delete('/:id', async (req, res) => {
       // 1. Demote — by email if we have it, else by JS-side name match
       //    against firstName + lastName.
       try {
+        const demotedIds = [];
         if (doc.email) {
-          const r = await Employee.updateMany(
-            { email: String(doc.email).toLowerCase(), role: 'manager' },
-            { $set: { role: 'employee' } }
-          );
-          cleanup.demoted += r.modifiedCount || 0;
+          const targets = await Employee.find(
+            { email: String(doc.email).toLowerCase(), role: 'manager' }
+          ).select('_id employeeId email').lean();
+          if (targets.length > 0) {
+            const r = await Employee.updateMany(
+              { _id: { $in: targets.map((t) => t._id) } },
+              { $set: { role: 'employee' } }
+            );
+            cleanup.demoted += r.modifiedCount || 0;
+            demotedIds.push(...targets);
+          }
         }
         if (wantedName) {
-          const candidates = await Employee.find({ role: 'manager' }).select('_id firstName lastName').lean();
+          const candidates = await Employee.find({ role: 'manager' }).select('_id employeeId email firstName lastName').lean();
           const matches = candidates.filter((e) => {
             const full = [e.firstName || '', e.lastName || ''].filter(Boolean).join(' ').trim().toLowerCase();
             return full === wantedName;
@@ -191,7 +240,15 @@ router.delete('/:id', async (req, res) => {
               { $set: { role: 'employee' } }
             );
             cleanup.demoted += r.modifiedCount || 0;
+            demotedIds.push(...matches);
           }
+        }
+        // Notify each demoted user once (de-dupe by _id).
+        const seen = new Set();
+        for (const t of demotedIds) {
+          if (seen.has(String(t._id))) continue;
+          seen.add(String(t._id));
+          notifyDemotion(t).catch(() => {});
         }
       } catch (e) {
         console.warn('[managers.delete] role demote failed:', e.message);

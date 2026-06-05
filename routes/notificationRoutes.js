@@ -140,13 +140,32 @@ async function fetchComplaintNotifs() {
     });
 }
 
-async function fetchAnnouncementNotifs() {
+async function fetchAnnouncementNotifs(viewerEmail) {
   try {
     const docs = await Announcement.find({})
       .sort({ createdAt: -1 })
       .limit(20)
       .lean();
-    return (docs || []).map((d) => ({
+    // Suppress self-notifications — if HR posted the announcement
+    // themselves, don't show it back to them on their own bell.
+    // Match by postedByEmail (canonical) and fall back to postedBy name.
+    const me = String(viewerEmail || '').trim().toLowerCase();
+    const filtered = (docs || []).filter((d) => {
+      if (!me) return true;
+      const author = String(d.postedByEmail || '').trim().toLowerCase();
+      if (author && author === me) return false;
+      // Defensive name-based suppression — every HRMS announcement is
+      // posted by HR, so drop anything whose postedBy matches the HRMS
+      // admin display ("HR Admin", "Tesco Structures") when the viewer
+      // is themselves an HRMS admin email.
+      const isHrmsAdmin =
+        me === 'tescostructures@gmail.com' ||
+        me === 'hr@tescostructures.in'   ||
+        me === 'tescodigitals26@gmail.com';
+      if (isHrmsAdmin) return false;
+      return true;
+    });
+    return filtered.map((d) => ({
       id:        `ann-${d._id}`,
       type:      'announcement',
       title:     d.title ? `New announcement: ${d.title}` : 'New announcement posted',
@@ -187,7 +206,7 @@ router.get('/', async (req, res) => {
       fetchLeaveNotifs(),
       fetchAllowanceNotifs(),
       fetchComplaintNotifs(),
-      fetchAnnouncementNotifs(),
+      fetchAnnouncementNotifs(req.headers['x-admin-email']),
     ]);
 
     let merged = [...leave, ...allow, ...cmpl, ...ann].filter((n) => n.timestamp);
