@@ -81,7 +81,7 @@ router.put('/:id', async (req, res) => {
 // DELETE /api/designations/:id — soft delete
 router.delete('/:id', async (req, res) => {
   try {
-    const designation = await Designation.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
+    const designation = await Designation.findByIdAndDelete(req.params.id);
     if (!designation) return res.status(404).json({ success: false, message: 'Designation not found' });
     res.status(200).json({ success: true, message: `Designation "${designation.title}" deleted successfully` });
   } catch (err) {

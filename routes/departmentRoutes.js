@@ -82,7 +82,7 @@ router.put('/:id', async (req, res) => {
 // DELETE /api/departments/:id — soft delete
 router.delete('/:id', async (req, res) => {
   try {
-    const department = await Department.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
+    const department = await Department.findByIdAndDelete(req.params.id);
     if (!department) return res.status(404).json({ success: false, message: 'Department not found' });
     res.status(200).json({ success: true, message: `Department "${department.name}" deleted successfully` });
   } catch (err) {
