@@ -15,49 +15,15 @@ const Designation = require('../models/Designation');
 // One row per department the catalogue implies. The manager column is the
 // person from HR's printed roster who heads that department; null = no
 // matching Head/Manager in the source list.
-const DEPARTMENTS = [
-  { name: 'Management',           manager: 'Vimal Kumar' },
-  { name: 'Sales',                manager: 'Saleem Khan' },
-  { name: 'Execution',            manager: 'Vishnu K' },
-  { name: 'Business Development', manager: 'Anish Kumar' },
-  { name: 'Design',               manager: 'Gopinath' },
-  { name: 'Engineering',          manager: 'Sinduja' },
-  { name: 'Marketing',            manager: 'Durga Devi' },
-  { name: 'HR',                   manager: 'Pavithra B' },
-  { name: 'Project Management',   manager: 'Suresh' },
-  { name: 'Development',          manager: 'Vivek' },
-  { name: 'Accounts',             manager: 'Vimal M' },
-];
+// DEPARTMENTS seed list emptied for go-live (Jun 2026).
+// HR manages departments via the HRMS UI; this file is no longer the
+// source of truth. Kept as an empty array so the unused seedCompanyData
+// function (boot call disabled in server.js) is still a clean no-op.
+const DEPARTMENTS = [];
 
 // [title, departmentName]. Duplicates by title are skipped at insert time.
-const DESIGNATIONS = [
-  ['Managing Director',           'Management'],
-  ['Sales head',                  'Sales'],
-  ['Execution Head',              'Execution'],
-  ['Business Development Head',   'Business Development'],
-  ['Business Development manager','Business Development'],
-  ['Business Development Associate','Business Development'],
-  ['Design Head',                 'Design'],
-  ['Design Manager',              'Design'],
-  ['Design Engineer',             'Design'],
-  ['Designer Engineer',           'Design'],
-  ['Senior Engineer',             'Engineering'],
-  ['Site Engineer',               'Engineering'],
-  ['Structural Engineer',         'Engineering'],
-  ['Technical Lead',              'Engineering'],
-  ['Technical Lead Consultant',   'Engineering'],
-  ['Project Engineer',            'Project Management'],
-  ['Web Developer',               'Development'],
-  ['UI/UX Developer',             'Development'],
-  ['Sales Coordinator',           'Sales'],
-  ['Sales Executive',             'Sales'],
-  ['Techno Commercial Coordinator','Sales'],
-  ['Digital Marketing Manager',   'Marketing'],
-  ['SEO',                         'Marketing'],
-  ['Video editor',                'Marketing'],
-  ['HR',                          'HR'],
-  ['Accountant',                  'Accounts'],
-];
+// DESIGNATIONS seed list emptied for go-live (Jun 2026).
+const DESIGNATIONS = [];
 
 async function ensureDepartments() {
   let created = 0;

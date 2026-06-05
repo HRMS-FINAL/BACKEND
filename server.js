@@ -246,12 +246,16 @@ connectDB().then(() => {
     // is unset), enabled in production via Render's injected env var.
     startKeepAlive(PORT);
 
-    // One-shot import + seed. The import-from-mobile job runs once on
-    // startup to copy any new mobile users into the local Employee model;
-    // the seed populates default departments / designations on first
-    // boot so an empty install still has dropdown choices in HRMS.
+    // One-shot import only. The boot-time seedCompanyData() call has
+    // been DISABLED for go-live (Jun 2026) — it was re-creating every
+    // deleted Designation + Department row whenever Render restarted
+    // the process, so HR's "delete" never stuck across restarts.
+    //
+    // HR now owns the Designation + Department directories from the UI;
+    // the API is the sole source of truth. To restore boot-time seeding,
+    // uncomment the second line below.
     importMobileUsers().catch((e) => console.error('[import] failed:', e.message));
-    seedCompanyData().catch((e) => console.error('[seed] failed:', e.message));
+    // seedCompanyData().catch((e) => console.error('[seed] failed:', e.message));
   });
 }).catch((err) => {
   console.error('Could not start HRM Backend:', err.message);
