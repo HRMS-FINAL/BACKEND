@@ -161,6 +161,106 @@ router.get('/attendance', async (req, res) => {
       grouped[key].leavedays += Math.max(0, Math.ceil((to - from) / 86400000) + 1);
     });
 
+    // ── MISSING-DAY ABSENT SWEEP (Jun 2026) ─────────────────────────────
+    //
+    // The aggregations above only count status from attendance ROWS that
+    // exist. Employees who never check in for a stretch of working days
+    // produce NO attendance rows, so their absent count was stuck at 0
+    // and they may not appear in the report at all. HR flagged this on
+    // 10-Jun-26.
+    //
+    // Fix: walk every employee × every working day in the requested
+    // window. If the employee has no log and no approved leave for that
+    // day (and the day is a past Mon-Sat), count it as absent. Add the
+    // employee to `grouped` if they weren't already there so they
+    // surface in the report with their real absent figure.
+    //
+    // Working day = Mon-Sat (Sunday = weekly off). Future days, Sundays,
+    // and days before joiningDate (or after resignedDate) are skipped.
+    //
+    // Build a per-employee Set of dates that already have a log so the
+    // sweep doesn't double-count them.
+    const loggedDatesByKey = {};
+    const recordLogged = (key, date) => {
+      if (!loggedDatesByKey[key]) loggedDatesByKey[key] = new Set();
+      loggedDatesByKey[key].add(date);
+    };
+    mobileLogs.forEach(log => {
+      const empId = log.user?.employeeId || '';
+      const key = empId || (log.user?._id ? String(log.user._id) : '');
+      if (key && log.date) recordLogged(key, log.date);
+    });
+    localLogs.forEach(log => {
+      const key = log.employeeId || log.employeeName || String(log._id);
+      if (log.date) recordLogged(key, log.date);
+    });
+
+    // Approved leave date set per employee — used to skip days the
+    // employee was on leave (those count toward leavedays, not absent).
+    const leaveDatesByKey = {};
+    leaveReqs.forEach(lr => {
+      let key = lr.employeeId || null;
+      if (!key && lr.employee) {
+        const emp = empByMongoId[String(lr.employee)];
+        if (emp) key = emp.employeeId || String(emp._id);
+      }
+      if (!key) return;
+      const from = new Date(Math.max(new Date(lr.fromDate), new Date(startDate)));
+      const to   = new Date(Math.min(new Date(lr.toDate),   new Date(endDate)));
+      for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
+        const iso = d.toISOString().slice(0, 10);
+        if (!leaveDatesByKey[key]) leaveDatesByKey[key] = new Set();
+        leaveDatesByKey[key].add(iso);
+      }
+    });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+    employees.forEach(emp => {
+      const key = emp.employeeId || String(emp._id);
+      if (!key) return;
+      // Date floor: max(startDate, joiningDate).
+      const joiningStr = emp.joiningDate
+        ? new Date(emp.joiningDate).toISOString().slice(0, 10)
+        : '';
+      const floorStr = (joiningStr && joiningStr > startDate) ? joiningStr : startDate;
+      // Date ceiling: min(endDate, today, resignedDate).
+      let ceilStr = endDate < todayIso ? endDate : todayIso;
+      if (emp.resignedDate) {
+        const r = new Date(emp.resignedDate).toISOString().slice(0, 10);
+        if (r < ceilStr) ceilStr = r;
+      }
+      if (floorStr > ceilStr) return;
+
+      // Walk every day in the window. Skip Sundays.
+      for (let d = new Date(floorStr); d <= new Date(ceilStr); d.setDate(d.getDate() + 1)) {
+        if (d.getDay() === 0) continue;          // weekly off
+        const iso = d.toISOString().slice(0, 10);
+        if (loggedDatesByKey[key] && loggedDatesByKey[key].has(iso)) continue;
+        if (leaveDatesByKey[key]  && leaveDatesByKey[key].has(iso))  continue;
+
+        // Employee did NOT check in AND was not on approved leave →
+        // count this day as absent. Initialise the grouped row if
+        // they've never appeared in the report before.
+        if (!grouped[key]) {
+          const fullName =
+            emp.name ||
+            [emp.firstName, emp.lastName].filter(Boolean).join(' ') ||
+            'Unknown';
+          const initials = fullName.split(' ').filter(Boolean)
+            .map(n => n[0]).join('').toUpperCase().slice(0, 2) || '??';
+          grouped[key] = {
+            employeeId:   emp.employeeId || '',
+            employeeName: fullName,
+            avatar:       initials,
+            color:        emp.color || COLORS[(fullName.charCodeAt(0) || 0) % COLORS.length],
+            empDoc:       emp,
+            present: 0, late: 0, absent: 0, halfDay: 0, leavedays: 0,
+          };
+        }
+        grouped[key].absent++;
+      }
+    });
+
     // Build rows
     //
     // LOP policy (set by HR on 2026-05-28):

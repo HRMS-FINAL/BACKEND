@@ -31,13 +31,23 @@ async function fwdMobile(path) {
   }
 }
 
-/** Map mobile-app status → HRMS UI status code. */
+/**
+ * Map mobile-app status → HRMS UI status code.
+ *
+ * Jun 2026 — `permission` and `halfday` are now DISTINCT statuses (was
+ * both mapped to "Half Day" earlier, which collapsed the policy meaning):
+ *   • permission → employee filed a permission request for the day,
+ *                  HR can approve/reject it. No LOP.
+ *   • halfday    → employee checked out before 5:30 PM with no
+ *                  permission request on file. Counts as 0.5 LOP once
+ *                  the 2-per-month free quota is used.
+ */
 function mapStatus(s) {
   switch (String(s || '').toLowerCase()) {
     case 'present':    return 'On Time';
     case 'late':       return 'Late';
     case 'leave':      return 'Absent';
-    case 'permission': return 'Half Day';
+    case 'permission': return 'Permission';
     case 'absent':     return 'Absent';
     case 'halfday':    return 'Half Day';
     default:           return s || 'On Time';
