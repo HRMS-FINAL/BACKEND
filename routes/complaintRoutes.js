@@ -13,14 +13,14 @@
  *   • The admin secret stays SERVER-SIDE (env var, never sent to browser)
  *
  * Required env vars on the HRMS backend:
- *   MOBILE_API_URL        e.g. https://backend-emqy.onrender.com
+ *   MOBILE_API_URL        e.g. https://backend-9rtc.onrender.com
  *   MOBILE_ADMIN_SECRET   same value as ADMIN_SECRET on the mobile backend
  */
 
 const express = require('express');
 const router  = express.Router();
 
-const MOBILE_API     = (process.env.MOBILE_API_URL    || 'https://backend-emqy.onrender.com').replace(/\/+$/, '');
+const MOBILE_API     = (process.env.MOBILE_API_URL    || 'https://backend-9rtc.onrender.com').replace(/\/+$/, '');
 const ADMIN_SECRET   =  process.env.MOBILE_ADMIN_SECRET || '';
 const FETCH_TIMEOUT_MS = 30_000;
 

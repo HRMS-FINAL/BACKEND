@@ -19,7 +19,7 @@ const Employee     = require('../models/Employee');
 const Department   = require('../models/Department');
 const Designation  = require('../models/Designation');
 
-const MOBILE_API   = (process.env.MOBILE_API_URL    || 'https://backend-emqy.onrender.com').replace(/\/+$/, '');
+const MOBILE_API   = (process.env.MOBILE_API_URL    || 'https://backend-9rtc.onrender.com').replace(/\/+$/, '');
 const ADMIN_SECRET =  process.env.MOBILE_ADMIN_SECRET || '';
 const FETCH_TIMEOUT_MS = 45_000;
 

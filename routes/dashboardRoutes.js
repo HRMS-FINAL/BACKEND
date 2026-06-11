@@ -5,7 +5,7 @@ const Employee   = require('../models/Employee');
 const Leave      = require('../models/LeaveRequest');
 const Department = require('../models/Department');
 
-const MOBILE_API   = (process.env.MOBILE_API_URL    || 'https://backend-emqy.onrender.com').replace(/\/+$/, '');
+const MOBILE_API   = (process.env.MOBILE_API_URL    || 'https://backend-9rtc.onrender.com').replace(/\/+$/, '');
 const ADMIN_SECRET =  process.env.MOBILE_ADMIN_SECRET || '';
 
 // GET /api/dashboard/attendance-today[?date=YYYY-MM-DD]

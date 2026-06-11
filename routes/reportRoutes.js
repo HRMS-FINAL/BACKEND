@@ -10,7 +10,7 @@ const Designation  = require('../models/Designation');
 const COLORS = ['#4CAA17','#9F7AEA','#4299E1','#ECC94B','#FC8181','#48BB78','#ED64A6','#667EEA'];
 const isObjId  = v => v && /^[a-f0-9]{24}$/i.test(String(v));
 
-const MOBILE_API   = (process.env.MOBILE_API_URL    || 'https://backend-emqy.onrender.com').replace(/\/+$/, '');
+const MOBILE_API   = (process.env.MOBILE_API_URL    || 'https://backend-9rtc.onrender.com').replace(/\/+$/, '');
 const ADMIN_SECRET =  process.env.MOBILE_ADMIN_SECRET || '';
 const FETCH_TIMEOUT_MS = 45_000;
 

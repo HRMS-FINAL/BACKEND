@@ -19,7 +19,7 @@ const { requireAdmin } = require('../middleware/authMiddleware');
 const isObjectId = v => v && mongoose.Types.ObjectId.isValid(String(v)) && String(v).length === 24;
 
 // ─── Mirror to mobile backend ──────────────────────────────────────────
-const MOBILE_API   = (process.env.MOBILE_API_URL    || 'https://backend-emqy.onrender.com').replace(/\/+$/, '');
+const MOBILE_API   = (process.env.MOBILE_API_URL    || 'https://backend-9rtc.onrender.com').replace(/\/+$/, '');
 const ADMIN_SECRET =  process.env.MOBILE_ADMIN_SECRET || '';
 
 /**

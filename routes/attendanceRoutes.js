@@ -11,7 +11,7 @@ const LeaveRequest = require('../models/LeaveRequest');
 // /stats requests there and reshape the response into the field names the
 // existing HRMS Attendance.jsx page already expects — so no UI changes.
 // ─────────────────────────────────────────────
-const MOBILE_API   = (process.env.MOBILE_API_URL    || 'https://backend-emqy.onrender.com').replace(/\/+$/, '');
+const MOBILE_API   = (process.env.MOBILE_API_URL    || 'https://backend-9rtc.onrender.com').replace(/\/+$/, '');
 const ADMIN_SECRET =  process.env.MOBILE_ADMIN_SECRET || '';
 const FETCH_TIMEOUT_MS = 30_000;
 

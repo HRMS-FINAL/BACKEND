@@ -26,7 +26,7 @@ const router  = express.Router();
 
 const Announcement = require('../models/Announcement');
 
-const MOBILE_API   = (process.env.MOBILE_API_URL    || 'https://backend-emqy.onrender.com').replace(/\/+$/, '');
+const MOBILE_API   = (process.env.MOBILE_API_URL    || 'https://backend-9rtc.onrender.com').replace(/\/+$/, '');
 const ADMIN_SECRET =  process.env.MOBILE_ADMIN_SECRET || '';
 const FETCH_TIMEOUT_MS = 20_000;
 
