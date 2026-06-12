@@ -50,4 +50,40 @@ router.get('/', async (req, res) => {
   }
 });
 
+// ─── Office anchor lock (#281) ────────────────────────────────────
+// POST /api/live-tracking/lock-office  { employeeId } OR { lat, lng }
+//   → permanently anchors the live-tracking "office" centre.
+// GET  /api/live-tracking/lock-office
+//   → returns the currently locked anchor (or null if not set).
+async function proxyLock(req, res, method) {
+  if (!ADMIN_SECRET) {
+    return res.status(503).json({ success: false, message: 'MOBILE_ADMIN_SECRET not configured.' });
+  }
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const opts = {
+      method,
+      headers: { 'x-admin-secret': ADMIN_SECRET, 'Content-Type': 'application/json' },
+      signal:  ctrl.signal,
+    };
+    if (method === 'POST') opts.body = JSON.stringify(req.body || {});
+    const r = await fetch(`${MOBILE_API}/api/attendance/admin/lock-office`, opts);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      return res.status(r.status).json({
+        success: false,
+        message: data?.message || `Mobile API responded ${r.status}`,
+      });
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(502).json({ success: false, message: 'Could not reach the mobile backend. ' + err.message });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+router.post('/lock-office', (req, res) => proxyLock(req, res, 'POST'));
+router.get ('/lock-office', (req, res) => proxyLock(req, res, 'GET'));
+
 module.exports = router;
