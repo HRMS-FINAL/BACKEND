@@ -167,8 +167,37 @@ router.get('/', async (req, res) => {
       });
     }
     const reshaped = (Array.isArray(data.items) ? data.items : []).map(reshape);
-    const petrol = reshaped.filter((x) => x.type === 'petrol');
-    const travel = reshaped.filter((x) => x.type === 'travel');
+    // #302 — Classify each row defensively. The strict `=== 'petrol'`
+    // / `=== 'travel'` checks here previously dropped rows whose mobile
+    // backend wrote the type in mixed case ("Petrol", "TRAVEL") or with
+    // extra whitespace, AND silently mis-sorted any row where `type`
+    // was missing entirely. The result was HR seeing the same list under
+    // both cards, or one tab being empty. Now we lowercase + trim, fall
+    // back to structural fingerprints (auto-billed petrol rows have
+    // `gpsKm` / `distance` derived from live-tracking; travel rows have
+    // `purpose` set), and stamp a canonical _kind for the frontend.
+    const classify = (x) => {
+      const t = String(x?.type || '').toLowerCase().trim();
+      if (t === 'petrol' || t.includes('petrol')) return 'petrol';
+      if (t === 'travel' || t.includes('travel')) return 'travel';
+      // Structural fallback. Petrol-from-GPS rows always have a numeric
+      // `distance` AND no employee-entered purpose (the auto-biller
+      // stamps purpose: 'Daily Commute' but never collects fromLat etc.).
+      // Travel rows always have a `purpose` or `fromLat`/`toLat`.
+      if (x?.fromLat || x?.toLat || x?.fromLng || x?.toLng) return 'travel';
+      if (x?.purpose && x.purpose !== 'Daily Commute')      return 'travel';
+      if (typeof x?.distance === 'number' && x.distance > 0) return 'petrol';
+      return 'travel';   // safer to surface in Travel than to lose
+    };
+    const petrol = [];
+    const travel = [];
+    for (const r of reshaped) {
+      const kind = classify(r);
+      const stamped = { ...r, _kind: kind };
+      if (kind === 'petrol') petrol.push(stamped);
+      else                   travel.push(stamped);
+    }
+    console.log(`[allowances] returning petrol=${petrol.length} travel=${travel.length} (total=${reshaped.length})`);
     res.json({
       success: true,
       petrol,

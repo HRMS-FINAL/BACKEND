@@ -17,6 +17,30 @@ const announcementSchema = new mongoose.Schema(
       minlength: 3,
       maxlength: 5000,
     },
+    // ─── Mobile-app mirror field (Jun 2026 — #295) ────────────────────
+    // The shared `announcements` collection is read by BOTH HRMS (uses
+    // `description`) and ERM Mobile (uses `body`). Before this field
+    // existed, Mongoose strict-mode silently dropped the `body` key
+    // the announcement route was trying to write — so mobile showed
+    // only the title with no content. Declaring `body` here lets the
+    // create()/update() calls in routes/announcementRoutes.js actually
+    // persist it. Kept as a non-required mirror so old rows still
+    // validate; the route always populates it from `description`.
+    body: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 5000,
+    },
+    // `postedBy` mirrors `createdByName` and is what the mobile reader
+    // shows under each card ("Posted by HR"). Also silently dropped
+    // before this field was declared.
+    postedBy: {
+      type: String,
+      default: 'HR',
+      trim: true,
+      maxlength: 200,
+    },
     category: {
       type: String,
       enum: ['General', 'HR', 'Policy', 'Event', 'Holiday', 'Training', 'Benefits', 'Office', 'Other'],
