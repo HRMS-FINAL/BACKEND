@@ -1,12 +1,13 @@
 /**
  * Notification feed for the HRMS top-bar bell.
  *
- * Aggregates four live sources into one chronologically-sorted feed:
+ * Aggregates five live sources into one chronologically-sorted feed:
  *
- *   1. Leave / permission requests   (via /api/leave-requests proxy → mobile)
- *   2. Allowance requests            (via /api/allowances     proxy → mobile)
- *   3. Complaints                    (via /api/complaints     proxy → mobile)
- *   4. Announcements                 (local HRMS DB)
+ *   1. Leave / permission requests       (via /api/leave-requests proxy → mobile)
+ *   2. Allowance requests                (via /api/allowances     proxy → mobile)
+ *   3. Complaints                        (via /api/complaints     proxy → mobile)
+ *   4. Announcements                     (local HRMS DB)
+ *   5. Attendance regularisation requests (#332 — via mobile admin proxy)
  *
  * Each event becomes one notification: type, title, time (relative), an
  * ISO `timestamp` for client-side sorting, and a flag `read` so the bell
@@ -140,6 +141,48 @@ async function fetchComplaintNotifs() {
     });
 }
 
+// #332 — Attendance regularisation requests now surface in the HR
+// bell too. Before this, employees filed an attendance request from
+// ERM Mobile / Web but it only appeared on the dedicated Attendance
+// Requests page — HR had to remember to check it. With this fetcher,
+// every new request also shows up in the top-bar notification feed
+// alongside leave, allowance, complaint, and announcement events.
+async function fetchAttendanceRequestNotifs() {
+  if (!ADMIN_SECRET) return [];
+  const data = await fwd('/api/attendance/admin/requests?limit=50');
+  // Mobile endpoint returns either an array, or { items: [...] }.
+  const items = Array.isArray(data) ? data
+              : Array.isArray(data?.items) ? data.items
+              : [];
+  return items
+    .filter((it) => it.createdAt)
+    .map((it) => {
+      const name = pickEmpName(it.user);
+      // Format the requested date as dd-mm-yyyy for the HR-facing title.
+      const dateStr = (() => {
+        const raw = it.date || '';
+        if (!raw) return '';
+        // Accept either YYYY-MM-DD or ISO timestamps.
+        const s = String(raw).slice(0, 10);
+        const parts = s.split('-');
+        return parts.length === 3 ? `${parts[2]}-${parts[1]}-${parts[0]}` : s;
+      })();
+      return {
+        id:        `attreq-${it._id}`,
+        type:      'attendance-request',
+        title:     dateStr
+          ? `Attendance request from ${name} for ${dateStr}`
+          : `Attendance request from ${name}`,
+        timestamp: it.createdAt,
+        time:      relTime(it.createdAt),
+        status:    it.status || 'pending',
+        // Frontend `Notifications.jsx` switches `activeView` based on
+        // this nav key — must match the AttendanceRequests page entry.
+        nav:       'attendance-requests',
+      };
+    });
+}
+
 async function fetchAnnouncementNotifs(viewerEmail) {
   try {
     const docs = await Announcement.find({})
@@ -179,7 +222,7 @@ async function fetchAnnouncementNotifs(viewerEmail) {
   }
 }
 
-/* ─── Routes ────────────────────────────────────────────────────────── */
+/* ─── Routes ──────────────────────────────────────────────────────── */
 
 /**
  * GET /api/notifications
@@ -202,14 +245,20 @@ router.get('/', async (req, res) => {
     const since = req.query.since ? new Date(req.query.since) : null;
     const limit = Math.max(1, Math.min(parseInt(req.query.limit || '30', 10), 200));
 
-    const [leave, allow, cmpl, ann] = await Promise.all([
+    // #332 — attendanceReq added as the 5th source so attendance
+    // regularisation requests filed from ERM Mobile / Web show up in
+    // the HRMS bell, not just on the dedicated AttendanceRequests
+    // page. Same fail-soft pattern as the others (returns [] on
+    // network error rather than throwing).
+    const [leave, allow, cmpl, ann, attendanceReq] = await Promise.all([
       fetchLeaveNotifs(),
       fetchAllowanceNotifs(),
       fetchComplaintNotifs(),
       fetchAnnouncementNotifs(req.headers['x-admin-email']),
+      fetchAttendanceRequestNotifs(),
     ]);
 
-    let merged = [...leave, ...allow, ...cmpl, ...ann].filter((n) => n.timestamp);
+    let merged = [...leave, ...allow, ...cmpl, ...ann, ...attendanceReq].filter((n) => n.timestamp);
     merged.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
     // Mark each item as read/unread relative to the supplied cursor.
