@@ -21,7 +21,13 @@ const assetSchema = new mongoose.Schema(
     type: {
       type: String,
       required: [true, 'Asset type is required'],
-      enum: ['Laptop', 'Monitor', 'Mouse', 'Keyboard', 'ID Card', 'PC', 'Mobile with SIM', 'Other'],
+      // 'SIM Card' added (#348) — the Add Asset UI has TWO distinct
+      // options: "Mobile with SIM" (a phone that ships with an
+      // embedded SIM) and "SIM Card" (a standalone SIM issued to
+      // employees). The enum was missing the second value which made
+      // save fail with "SIM Card is not a valid enum value for path
+      // 'type'". Keep both so old rows still validate.
+      enum: ['Laptop', 'Monitor', 'Mouse', 'Keyboard', 'ID Card', 'PC', 'Mobile with SIM', 'SIM Card', 'Other'],
       default: 'Laptop',
     },
     // Reference to the employee this asset is assigned to.
@@ -78,12 +84,18 @@ assetSchema.index({ serialNo: 1 }, { unique: true, partialFilterExpression: { is
 // Earlier deployments created a `serialNo_1` index that was FULL-UNIQUE
 // (not partial). After we switched to partial-unique above, the old
 // index sticks around in Mongo and throws E11000 the moment HR tries to
-// re-issue a serial that was used by a soft-deleted asset. This hook
-// drops the legacy index ONCE on startup, leaving only the new partial
-// one in place. Idempotent — `dropIndex` throws if it's already gone,
-// we swallow that case.
+// re-issue a serial that was used by a soft-deleted asset — OR when
+// editing an active asset whose serialNo happens to match a soft-deleted
+// row (because the legacy index counts inactive rows too).
+//
+// #348 — Hardened cleanup: instead of running once and giving up, we
+//        expose a helper that route handlers can call before writes
+//        that hit the unique constraint. Callers still don't block on
+//        it (fire-and-forget), but it means the drop is retried after
+//        every server restart AND on-demand from the route layer.
 async function dropLegacySerialNoIndex() {
   try {
+    if (mongoose.connection.readyState !== 1) return;   // not open yet
     const coll = mongoose.connection.collection('assets');
     const indexes = await coll.indexes();
     for (const idx of indexes) {
@@ -94,11 +106,17 @@ async function dropLegacySerialNoIndex() {
         console.log('[Asset] dropped legacy full-unique serialNo_1 index');
       }
     }
-  } catch (e) { console.warn('[Asset] index cleanup:', e.message); }
+  } catch (e) {
+    console.warn('[Asset] index cleanup:', e.message);
+  }
 }
-// Run when the connection is open. Wrap in setTimeout so it doesn't
-// race with the rest of model registration.
+
+// Run when the connection is open, and also if it happens to already
+// be open by the time this module was required (nodemon hot reload).
 mongoose.connection.once('open', () => setTimeout(dropLegacySerialNoIndex, 2000));
+if (mongoose.connection.readyState === 1) {
+  setTimeout(dropLegacySerialNoIndex, 500);
+}
 
 // Auto-generate assetId like AST-001 if not supplied.
 //
@@ -122,4 +140,12 @@ assetSchema.pre('validate', async function () {
   this.assetId = `AST-${String(nextNum).padStart(3, '0')}`;
 });
 
-module.exports = mongoose.model('Asset', assetSchema);
+const Asset = mongoose.model('Asset', assetSchema);
+
+// #348 — Expose the cleanup helper on the compiled model so
+// assetRoutes.js can trigger it on demand after an E11000. Must be
+// attached AFTER mongoose.model() so it isn't overwritten by the
+// module.exports assignment below.
+Asset.dropLegacySerialNoIndex = dropLegacySerialNoIndex;
+
+module.exports = Asset;

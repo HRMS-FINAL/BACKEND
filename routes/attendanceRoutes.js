@@ -255,6 +255,31 @@ router.delete('/logs/:id', async (req, res) => {
   }
 });
 
+// #352d — PATCH /api/attendance/mark-status — HR manual override.
+// Proxies to the mobile backend so HR can flip Absent → Present after
+// an employee explains a late arrival. Body: { userId|employeeId, date,
+// status, note? }.
+router.patch('/mark-status', async (req, res) => {
+  if (!ADMIN_SECRET) {
+    return res.status(503).json({ success: false, message: 'MOBILE_ADMIN_SECRET is not configured.' });
+  }
+  try {
+    const r = await fetch(`${MOBILE_API}/api/attendance/admin/mark-status`, {
+      method:  'PATCH',
+      headers: { 'Content-Type': 'application/json', 'x-admin-secret': ADMIN_SECRET },
+      body:    JSON.stringify(req.body || {}),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      return res.status(r.status).json({ success: false, message: data?.message || `Mobile API responded ${r.status}` });
+    }
+    res.json({ success: true, item: data.item });
+  } catch (err) {
+    console.error('[attendance/mark-status proxy]', err.message);
+    res.status(502).json({ success: false, message: 'Could not reach the mobile backend. ' + err.message });
+  }
+});
+
 // GET /api/attendance/stats?date=YYYY-MM-DD
 router.get('/stats', async (req, res) => {
   const date = req.query.date || new Date().toISOString().split('T')[0];

@@ -231,12 +231,58 @@ router.put('/:id', async (req, res) => {
     if (typeof asset.assetName  === 'string') asset.assetName  = asset.assetName.trim();
     if (typeof asset.serialNo   === 'string') asset.serialNo   = asset.serialNo.trim();
 
-    await asset.save();
+    // #348 — Wrap the save so we can detect the legacy-index E11000
+    // that fires when a soft-deleted asset has the same serialNo as
+    // the row being edited. If it happens, drop the legacy index and
+    // retry ONCE. Any duplicate against an ACTIVE row keeps returning
+    // a friendly 400 as before.
+    try {
+      await asset.save();
+    } catch (dupErr) {
+      if (dupErr && dupErr.code === 11000 && /serialNo/i.test(String(dupErr.message))) {
+        // Is there ANOTHER active asset with the same serial?
+        const clash = await Asset.findOne({
+          _id: { $ne: asset._id },
+          serialNo: asset.serialNo,
+          isActive: true,
+        }).select('assetId');
+        if (clash) {
+          return res.status(400).json({
+            success: false,
+            message: `Serial "${asset.serialNo}" is already used by another active asset (${clash.assetId}).`,
+          });
+        }
+        // No active clash — the legacy full-unique serialNo_1 index is
+        // matching a soft-deleted row. Drop it and retry the save.
+        console.warn('[ASSET] E11000 on serialNo but no active clash — dropping legacy index and retrying');
+        try {
+          if (typeof Asset.dropLegacySerialNoIndex === 'function') {
+            await Asset.dropLegacySerialNoIndex();
+          }
+          await asset.save();
+        } catch (retryErr) {
+          console.error('[ASSET] Retry after legacy-index drop still failed:', retryErr.message);
+          return res.status(500).json({
+            success: false,
+            message: 'Could not save changes. Please refresh and try again.',
+          });
+        }
+      } else {
+        throw dupErr;  // Bubble to outer catch for validation / other errors.
+      }
+    }
     res.status(200).json({ success: true, data: asset, message: 'Asset updated successfully' });
   } catch (err) {
     console.error('[ASSET] Update error:', err);
     if (err.name === 'ValidationError') {
       return res.status(400).json({ success: false, message: err.message });
+    }
+    // #348 — Final safety net for any duplicate that slips through.
+    if (err.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: `Duplicate value on ${Object.keys(err.keyValue || {}).join(', ') || 'a unique field'}. Please refresh and try again.`,
+      });
     }
     res.status(500).json({ success: false, message: err.message });
   }
@@ -267,7 +313,7 @@ router.patch('/:id/assign', async (req, res) => {
 });
 
 // PATCH /api/assets/:id/return - return an asset (mark Available)
-router.patch('/:id/return', async (req, res) => {
+router.patch('/:id/return',  async (req, res) => {
   try {
     const asset = await findAssetByAnyId(req.params.id);
     if (!asset) return res.status(404).json({ success: false, message: 'Asset not found' });
