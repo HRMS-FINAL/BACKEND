@@ -263,6 +263,10 @@ router.patch('/mark-status', async (req, res) => {
   if (!ADMIN_SECRET) {
     return res.status(503).json({ success: false, message: 'MOBILE_ADMIN_SECRET is not configured.' });
   }
+  // #369 — Try mobile backend first. If it 404s (endpoint not deployed
+  // yet) or times out, fall back to updating the local HRMS Attendance
+  // collection so HR isn't blocked. Local write is best-effort — it
+  // shows in the HRMS UI even if the mobile mirror stays stale.
   try {
     const r = await fetch(`${MOBILE_API}/api/attendance/admin/mark-status`, {
       method:  'PATCH',
@@ -270,13 +274,35 @@ router.patch('/mark-status', async (req, res) => {
       body:    JSON.stringify(req.body || {}),
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      return res.status(r.status).json({ success: false, message: data?.message || `Mobile API responded ${r.status}` });
+    if (r.ok) {
+      return res.json({ success: true, item: data.item, source: 'mobile' });
     }
-    res.json({ success: true, item: data.item });
+    // Mobile failed — try local fallback (never block HR).
+    console.warn('[attendance/mark-status] mobile responded', r.status, '— falling back to local update');
   } catch (err) {
-    console.error('[attendance/mark-status proxy]', err.message);
-    res.status(502).json({ success: false, message: 'Could not reach the mobile backend. ' + err.message });
+    console.warn('[attendance/mark-status] mobile unreachable — falling back to local update:', err.message);
+  }
+  // Local fallback: update the HRMS Attendance record directly.
+  try {
+    const { employeeId, userId, date, status = 'present', note = '' } = req.body || {};
+    const targetStatus = String(status).toLowerCase() === 'present'
+      ? 'On Time'
+      : String(status).charAt(0).toUpperCase() + String(status).slice(1);
+    const query = { date };
+    if (employeeId) query.employeeId = employeeId;
+    if (userId)     query.userId     = userId;
+    const item = await Attendance.findOneAndUpdate(
+      query,
+      { $set: { status: targetStatus, hrOverrideNote: note, hrOverrideAt: new Date() } },
+      { new: true, upsert: false }
+    );
+    if (!item) {
+      return res.status(404).json({ success: false, message: 'No local attendance row for that employee/date.' });
+    }
+    return res.json({ success: true, item, source: 'local' });
+  } catch (err) {
+    console.error('[attendance/mark-status local fallback]', err.message);
+    return res.status(500).json({ success: false, message: err.message });
   }
 });
 

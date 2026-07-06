@@ -44,7 +44,11 @@ router.get('/attendance-today', async (req, res) => {
     const late       = items.filter(a => a.status === 'late').length;
     const present    = items.filter(a => a.status === 'present').length + late;
     const leave      = items.filter(a => a.status === 'leave').length;
-    const permission = items.filter(a => a.status === 'permission' || a.status === 'halfday').length;
+    // #369 — Split Permission and Half Day so the Dashboard widget
+    // matches the Attendance Logs page (which counts only real
+    // Permission logs, not half-days).
+    const permission = items.filter(a => a.status === 'permission').length;
+    const halfDay    = items.filter(a => a.status === 'halfday' || a.status === 'half day').length;
     const checkedIn  = items.filter(a => !!a.checkIn).length;
     const absent     = Math.max(0, totalEmployees - checkedIn - leave);
 
@@ -60,7 +64,7 @@ router.get('/attendance-today', async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: { date: target, totalEmployees, present, late, leave, permission, absent, recent: logs },
+      data: { date: target, totalEmployees, present, late, leave, permission, halfDay, absent, recent: logs },
     });
   } catch (err) {
     console.error('[dashboard/attendance-today]', err.message);
