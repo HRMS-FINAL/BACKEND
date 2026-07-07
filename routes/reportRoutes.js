@@ -116,7 +116,7 @@ router.get('/attendance', async (req, res) => {
           avatar:       initials || '??',
           color:        empDoc?.color || COLORS[(fullName.charCodeAt(0) || 0) % COLORS.length],
           empDoc:       empDoc,
-          present: 0, late: 0, absent: 0, halfDay: 0, leavedays: 0,
+          present: 0, late: 0, absent: 0, permission: 0, halfDay: 0, leavedays: 0,
         };
       }
       const g = grouped[key];
@@ -125,7 +125,14 @@ router.get('/attendance', async (req, res) => {
       else if (s === 'late')       g.late++;
       else if (s === 'absent')     g.absent++;
       else if (s === 'leave')      g.absent++; // counted via overlay too, but absent is the raw bucket
-      else if (s === 'permission' || s === 'halfday') g.halfDay++;
+      // #381 — SPLIT permission vs halfday. Previously both statuses fed
+      // the same halfDay counter and the chart labeled that combined
+      // number as "Permission", inflating the permission bar with all
+      // 1/2 LOP entries. Now they're tracked separately: permission =
+      // approved partial-day off; halfDay = worked < 5h without
+      // permission (half-day LOP).
+      else if (s === 'permission') g.permission++;
+      else if (s === 'halfday')    g.halfDay++;
     });
 
     // ── Merge any legacy local-DB logs (only if mobile didn't already cover) ──
@@ -141,13 +148,14 @@ router.get('/attendance', async (req, res) => {
         avatar:       log.avatar || initials,
         color:        log.color  || empDoc?.color || COLORS[(fullName.charCodeAt(0) || 0) % COLORS.length],
         empDoc:       empDoc,
-        present: 0, late: 0, absent: 0, halfDay: 0, leavedays: 0,
+        present: 0, late: 0, absent: 0, permission: 0, halfDay: 0, leavedays: 0,
       };
       const g = grouped[key];
-      if      (log.status === 'On Time')  g.present++;
-      else if (log.status === 'Late')     g.late++;
-      else if (log.status === 'Absent')   g.absent++;
-      else if (log.status === 'Half Day') g.halfDay++;
+      if      (log.status === 'On Time')    g.present++;
+      else if (log.status === 'Late')       g.late++;
+      else if (log.status === 'Absent')     g.absent++;
+      else if (log.status === 'Permission') g.permission++;
+      else if (log.status === 'Half Day')   g.halfDay++;
     });
 
     // Overlay approved leave days (only for employees already in grouped)
@@ -254,7 +262,7 @@ router.get('/attendance', async (req, res) => {
             avatar:       initials,
             color:        emp.color || COLORS[(fullName.charCodeAt(0) || 0) % COLORS.length],
             empDoc:       emp,
-            present: 0, late: 0, absent: 0, halfDay: 0, leavedays: 0,
+            present: 0, late: 0, absent: 0, permission: 0, halfDay: 0, leavedays: 0,
           };
         }
         grouped[key].absent++;
@@ -274,11 +282,13 @@ router.get('/attendance', async (req, res) => {
     //   • halfLop   — half-day LOP equivalents (each = 0.5 of a day)
     const rows = Object.values(grouped).map(g => {
       const emp = g.empDoc;
-      const excessLeaves = Math.max(0, g.leavedays - 1);
-      const excessPerms  = Math.max(0, g.halfDay   - 2);
+      const excessLeaves = Math.max(0, g.leavedays  - 1);
+      // #381 — LOP rule uses PERMISSION count (2 free permissions/month),
+      // not halfDay. HalfDay is already 1/2 LOP by definition.
+      const excessPerms  = Math.max(0, g.permission - 2);
       const lateFullLop  = Math.floor(g.late / 6);
       const lateHalfLop  = (g.late % 6 >= 3) ? 1 : 0;
-      const lopDays      = excessLeaves + g.absent + lateFullLop;
+      const lopDays      = excessLeaves + g.absent + lateFullLop + g.halfDay;
       const halfLopDays  = excessPerms + lateHalfLop;
       return {
         employeeId:   g.employeeId,
@@ -289,11 +299,20 @@ router.get('/attendance', async (req, res) => {
         designation:  emp ? getDesig(emp.designation) : '—',
         manager:      emp?.assignedTo || '—',
         status:       emp?.status     || 'Active',
-        // For UI counts: Late is ALSO counted as present (employee did
-        // come in, just after the 10:01 AM cutoff).
+        // For UI TILES: Late is ALSO counted as present (employee did
+        // come in, just after the 10:01 AM cutoff). Kept per HR request #60.
         present:      g.present + g.late,
+        // #381b — DISJOINT category for the chart. `presentOnTime` is
+        // ONLY on-time attendance; the chart uses this so bars for
+        // Present + Late + Permission + Absent + HalfDay never
+        // double-count a single day. Table + tile numbers keep the
+        // "Late included in Present" convention HR asked for.
+        presentOnTime: g.present,
         late:         g.late,
         absent:       g.absent,
+        // Both surfaced separately so the chart / table can show
+        // real Permission count without mixing in half-day LOP.
+        permission:   g.permission,
         halfDay:      g.halfDay,
         leavedays:    g.leavedays,
         lop:          lopDays,
@@ -301,18 +320,24 @@ router.get('/attendance', async (req, res) => {
       };
     });
 
-    const totalPresent   = rows.reduce((s, r) => s + r.present,   0);
-    const totalLate      = rows.reduce((s, r) => s + r.late,      0);
-    const totalAbsent    = rows.reduce((s, r) => s + r.absent,    0);
-    const totalHalfDay   = rows.reduce((s, r) => s + r.halfDay,   0);
-    const totalLeavedays = rows.reduce((s, r) => s + r.leavedays, 0);
+    const totalPresent      = rows.reduce((s, r) => s + r.present,       0);
+    const totalPresentOnTime= rows.reduce((s, r) => s + r.presentOnTime, 0);
+    const totalLate         = rows.reduce((s, r) => s + r.late,          0);
+    const totalAbsent       = rows.reduce((s, r) => s + r.absent,        0);
+    const totalPermission   = rows.reduce((s, r) => s + r.permission,    0);
+    const totalHalfDay      = rows.reduce((s, r) => s + r.halfDay,       0);
+    const totalLeavedays    = rows.reduce((s, r) => s + r.leavedays,     0);
 
     return res.status(200).json({
       success: true,
       data: {
         startDate, endDate,
         totalEmployees: rows.length,
-        summary: { totalPresent, totalLate, totalAbsent, totalHalfDay, totalLeavedays },
+        summary: {
+          totalPresent, totalPresentOnTime,
+          totalLate, totalAbsent,
+          totalPermission, totalHalfDay, totalLeavedays,
+        },
         rows,
       },
     });
