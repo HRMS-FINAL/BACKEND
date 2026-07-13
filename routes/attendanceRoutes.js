@@ -186,6 +186,51 @@ router.get('/logs', async (req, res) => {
     }
     let items = Array.isArray(data.items) ? data.items.map(reshapeMobileAttendance) : [];
 
+    // #399 — HR OVERRIDE OVERLAY.
+    // Even after adminMarkStatus successfully sets hrOverride=true on the
+    // mobile backend (or falls back to a local write), a subsequent
+    // /attendance/logs proxy call can return the row still as Absent
+    // for two reasons:
+    //   (a) Render's read replica hasn't caught up with the write.
+    //   (b) The mobile backend fell over and the local fallback wrote
+    //       to the HRMS Attendance collection instead — but /logs
+    //       here proxies to the mobile backend and never reads local.
+    // Either way, HR clicks Mark Present, sees Present briefly, then
+    // watches the row revert to Absent within 1-2 seconds.
+    //
+    // The overlay solves both cases: after proxying, we look up the
+    // HRMS local Attendance collection for any row with hrOverride=true
+    // for the same date, and force-overwrite the status in the response.
+    // The local collection is our own source of truth for HR overrides.
+    try {
+      const overlayQuery = { hrOverride: true };
+      if (req.query.date)          overlayQuery.date = req.query.date;
+      else if (req.query.month && req.query.year) {
+        // Date range would need month bounds; skip overlay for month
+        // queries since they're rare and the mobile write is usually
+        // caught up by the time HR looks at a whole month.
+      }
+      const overrides = await Attendance.find(overlayQuery)
+        .select('employeeId date status hrOverrideStatus')
+        .lean();
+      if (overrides.length > 0) {
+        const byKey = new Map();
+        overrides.forEach(o => {
+          const key = `${o.employeeId || ''}|${o.date || ''}`;
+          if (key !== '|') byKey.set(key, o);
+        });
+        items = items.map(it => {
+          const key = `${it.employeeId || ''}|${it.date || ''}`;
+          const override = byKey.get(key);
+          if (!override) return it;
+          const forced = override.hrOverrideStatus || override.status || it.status;
+          return { ...it, status: forced, _hrOverridden: true };
+        });
+      }
+    } catch (overlayErr) {
+      console.warn('[attendance/logs] overlay lookup failed (non-fatal):', overlayErr.message);
+    }
+
     // Optional client-side text search across name/email/employeeId.
     if (req.query.search) {
       const s = String(req.query.search).toLowerCase();
@@ -267,6 +312,37 @@ router.patch('/mark-status', async (req, res) => {
   // yet) or times out, fall back to updating the local HRMS Attendance
   // collection so HR isn't blocked. Local write is best-effort — it
   // shows in the HRMS UI even if the mobile mirror stays stale.
+  // #406 — Helper: also write the override into the HRMS local Attendance
+  // collection so the /logs overlay ALWAYS finds it, even when the mobile
+  // write succeeded but Render's read replica is still stale on the very
+  // next /logs proxy call. Without this dual-write, HR would see the
+  // status flicker back to Absent for 3-8 seconds after Mark Present.
+  async function stampLocalOverride() {
+    try {
+      const { employeeId, userId, date, status = 'present', note = '' } = req.body || {};
+      if (!date) return;
+      const targetStatus = String(status).toLowerCase() === 'present'
+        ? 'On Time'
+        : String(status).charAt(0).toUpperCase() + String(status).slice(1);
+      const query = { date };
+      if (employeeId) query.employeeId = employeeId;
+      if (userId)     query.userId     = userId;
+      await Attendance.findOneAndUpdate(
+        query,
+        { $set: {
+            status: targetStatus,
+            hrOverride: true,
+            hrOverrideStatus: targetStatus,
+            hrOverrideNote: note,
+            hrOverrideAt: new Date(),
+        } },
+        { new: true, upsert: true }
+      );
+    } catch (e) {
+      console.warn('[mark-status] local mirror write failed (non-fatal):', e.message);
+    }
+  }
+
   try {
     const r = await fetch(`${MOBILE_API}/api/attendance/admin/mark-status`, {
       method:  'PATCH',
@@ -275,7 +351,10 @@ router.patch('/mark-status', async (req, res) => {
     });
     const data = await r.json().catch(() => ({}));
     if (r.ok) {
-      return res.json({ success: true, item: data.item, source: 'mobile' });
+      // #406 — Mirror the override into HRMS local so /logs overlay
+      // catches Render's read-replica lag on the follow-up refresh.
+      await stampLocalOverride();
+      return res.json({ success: true, item: data.item, source: 'mobile+local' });
     }
     // Mobile failed — try local fallback (never block HR).
     console.warn('[attendance/mark-status] mobile responded', r.status, '— falling back to local update');
@@ -291,10 +370,21 @@ router.patch('/mark-status', async (req, res) => {
     const query = { date };
     if (employeeId) query.employeeId = employeeId;
     if (userId)     query.userId     = userId;
+    // #399 — Stamp hrOverride: true so the /logs overlay can find
+    // this row later and force its status over any stale value the
+    // mobile backend returns. Without this, the local fallback wrote
+    // the status but the row was indistinguishable from a normal
+    // record, and the next /logs proxy read was overwriting it.
     const item = await Attendance.findOneAndUpdate(
       query,
-      { $set: { status: targetStatus, hrOverrideNote: note, hrOverrideAt: new Date() } },
-      { new: true, upsert: false }
+      { $set: {
+          status: targetStatus,
+          hrOverride: true,
+          hrOverrideStatus: targetStatus,
+          hrOverrideNote: note,
+          hrOverrideAt: new Date(),
+      } },
+      { new: true, upsert: true }
     );
     if (!item) {
       return res.status(404).json({ success: false, message: 'No local attendance row for that employee/date.' });
