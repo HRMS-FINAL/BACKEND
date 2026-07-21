@@ -31,6 +31,42 @@ async function fwdMobile(path) {
   }
 }
 
+// #455 — GET /api/attendance/summary?employeeId=&month=&year=
+//
+// Proxies to the ERM mobile backend's admin summary so the HRMS "Monthly
+// Overview" panel shows the SAME numbers as the employee's ERM attendance
+// cards. Previously Attendance.jsx recomputed the counts in the browser with
+// different rules (Late folded into Present, Absent = only rows literally
+// marked absent, Permission read off the day status — which is always 0 for a
+// partial-day permission). Those formulas could never match ERM. Now there is
+// one source of truth: ERM's computeMonthlySummary().
+router.get('/summary', async (req, res) => {
+  if (!ADMIN_SECRET) {
+    return res.status(503).json({ success: false, message: 'MOBILE_ADMIN_SECRET is not configured.' });
+  }
+  try {
+    const { employeeId, userId, month, year } = req.query;
+    if (!month || !year) {
+      return res.status(400).json({ success: false, message: 'month and year are required' });
+    }
+    if (!employeeId && !userId) {
+      return res.status(400).json({ success: false, message: 'employeeId or userId is required' });
+    }
+    const qs = new URLSearchParams({ month: String(month), year: String(year) });
+    if (employeeId) qs.set('employeeId', String(employeeId));
+    if (userId)     qs.set('userId', String(userId));
+
+    const r = await fwdMobile(`/api/attendance/admin/summary?${qs.toString()}`);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      return res.status(r.status).json({ success: false, message: data?.message || 'Mobile backend error' });
+    }
+    return res.json({ success: true, ...data });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 /**
  * Map mobile-app status → HRMS UI status code.
  *
