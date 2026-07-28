@@ -47,7 +47,15 @@ router.get('/attendance-today', async (req, res) => {
     // #369 — Split Permission and Half Day so the Dashboard widget
     // matches the Attendance Logs page (which counts only real
     // Permission logs, not half-days).
-    const permission = items.filter(a => a.status === 'permission').length;
+    // #468 — Count APPROVED permissions via the `hasPermission` overlay
+    // flag, not `status === 'permission'`. After a permission window
+    // closes, the mobile overlay collapses the day into 'present'
+    // (worked) or 'absent' (no-show), so status is no longer
+    // 'permission' — which is why the calendar showed 0 on past dates
+    // even though the Leave & Permission page (which counts approved
+    // permission requests) showed 1. The flag persists regardless of the
+    // final display status, so the mini-calendar now matches.
+    const permission = items.filter(a => a.hasPermission === true || a.status === 'permission').length;
     const halfDay    = items.filter(a => a.status === 'halfday' || a.status === 'half day').length;
     const checkedIn  = items.filter(a => !!a.checkIn).length;
     const absent     = Math.max(0, totalEmployees - checkedIn - leave);
@@ -88,11 +96,18 @@ async function getTodayAttendanceCounts() {
     const j = await r.json().catch(() => ({}));
     const items = Array.isArray(j.items) ? j.items : [];
     const c = (s) => items.filter(a => String(a.status || '').toLowerCase() === s).length;
+    // #468 — Permission tile counts APPROVED permissions via the overlay
+    // `hasPermission` flag (persists after the window closes and the day
+    // collapses to present/absent), plus half-days. Using status alone
+    // undercounted to 0 once a permission window had passed.
+    const permCount = items.filter(
+      a => a.hasPermission === true || String(a.status || '').toLowerCase() === 'permission'
+    ).length;
     return {
       present:    c('present'),
       late:       c('late'),
       leave:      c('leave'),
-      permission: c('permission') + c('halfday'),
+      permission: permCount + c('halfday'),
       total:      items.length,
     };
   } catch { return blank; }

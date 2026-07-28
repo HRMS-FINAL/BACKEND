@@ -131,8 +131,16 @@ router.get('/attendance', async (req, res) => {
       // 1/2 LOP entries. Now they're tracked separately: permission =
       // approved partial-day off; halfDay = worked < 5h without
       // permission (half-day LOP).
-      else if (s === 'permission') g.permission++;
       else if (s === 'halfday')    g.halfDay++;
+      // #468 — Count PERMISSION independently of the display status. An
+      // approved permission (both manager + HR) collapses into 'present'
+      // once its window closes (the employee still worked), so counting
+      // only `status === 'permission'` reported 0. The mobile overlay now
+      // stamps `hasPermission` on the row regardless of final status, so a
+      // Present day that had an approved permission is counted in BOTH the
+      // Present and Permission columns — matching the Leave & Permission
+      // page and feeding the 2-free-permissions/month LOP rule correctly.
+      if (log.hasPermission === true || s === 'permission') g.permission++;
     });
 
     // ── Merge any legacy local-DB logs (only if mobile didn't already cover) ──

@@ -179,6 +179,12 @@ function reshapeMobileAttendance(att) {
     workHours:    fmtWorked(att),
     status:       mapStatus(att.status),
     autoCheckedOut: !!att.autoCheckedOut,
+    // #468 — Pass through the approved-permission flag stamped by the
+    // mobile leave overlay. After a permission window closes the day's
+    // status collapses to Present/Absent, so the Attendance Logs page
+    // can no longer detect the permission from `status`. This flag lets
+    // the page's Permission card + "Perm" chip count it correctly.
+    hasPermission: !!att.hasPermission,
     lat:          att.checkInLat,
     lng:          att.checkInLng,
   };
