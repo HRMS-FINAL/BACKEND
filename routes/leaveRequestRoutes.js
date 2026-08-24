@@ -224,6 +224,12 @@ router.get('/', async (req, res) => {
     if (req.query.type)   q.set('type',   req.query.type);
     if (req.query.status) q.set('status', req.query.status);
     if (req.query.limit)  q.set('limit',  req.query.limit);
+    // Forward an optional requested-date range so the calendar gets every
+    // approved leave/permission overlapping the viewed month, keyed on the
+    // request's own dates (not approval time). Fixes late-approved requests
+    // disappearing from past dates.
+    if (req.query.from)   q.set('from',   req.query.from);
+    if (req.query.to)     q.set('to',     req.query.to);
     const qs = q.toString() ? `?${q.toString()}` : '';
 
     const r    = await fwd(`/api/leave/admin/all${qs}`);
