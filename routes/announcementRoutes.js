@@ -26,7 +26,11 @@ router.get('/', async (req, res) => {
       limit = 50,
     } = req.query;
 
-    const filter = { isActive: true };
+    // HR "Company Announcements" is company-wide only. Manager → team
+    // announcements (audience 'team' from ERM Mobile, 'manager-team' from
+    // ERM Web) belong to that manager's team and must NOT appear in the HR
+    // feed, even though all apps share one `announcements` collection.
+    const filter = { isActive: true, audience: { $nin: ['team', 'manager-team'] } };
     if (status)   filter.status   = status;
     if (category) filter.category = category;
     if (priority) filter.priority = priority;
@@ -70,7 +74,8 @@ router.get('/', async (req, res) => {
 // GET /api/announcements/stats — counters
 router.get('/stats', async (req, res) => {
   try {
-    const filter = { isActive: true };
+    // Exclude manager → team announcements from HR counters too.
+    const filter = { isActive: true, audience: { $nin: ['team', 'manager-team'] } };
     const [total, published, draft, archived, pinned, urgent, byCategoryRaw] = await Promise.all([
       Announcement.countDocuments(filter),
       Announcement.countDocuments({ ...filter, status: 'Published' }),
@@ -79,7 +84,7 @@ router.get('/stats', async (req, res) => {
       Announcement.countDocuments({ ...filter, isPinned: true }),
       Announcement.countDocuments({ ...filter, priority: 'Urgent' }),
       Announcement.aggregate([
-        { $match: { isActive: true } },
+        { $match: { isActive: true, audience: { $nin: ['team', 'manager-team'] } } },
         { $group: { _id: '$category', count: { $sum: 1 } } },
         { $sort: { count: -1 } },
       ]),
