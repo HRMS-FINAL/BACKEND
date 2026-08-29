@@ -163,6 +163,11 @@ function reshape(d) {
       designation: roleLabel,                          // resolved title
       department:  deptLabel,                          // resolved dept
     },
+    // #492 — AUTHORITATIVE kind, derived from the SAME `isPermission` that
+    // builds the `type` string above. The frontend trusts this directly, so a
+    // row's tab (leave vs permission) can NEVER disagree with its displayed
+    // type — killing the "Casual Leave shows under the Permission tab" bug.
+    kind:          isPermission ? 'permission' : 'leave',
     // Raw fields preserved if any other page wants them
     requestType:   d.requestType,
     hrComment:     d.hrComment   || '',
