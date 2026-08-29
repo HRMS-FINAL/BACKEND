@@ -148,7 +148,16 @@ router.get('/', async (req, res) => {
     const skip   = (page - 1) * limit;
     const search = req.query.search;
 
-    const filter = { isActive: { $ne: false }, status: { $ne: "Terminated" } };
+    // #486 — Return EVERY employee (Active AND Resigned/Terminated/Inactive).
+    // Deletion is a HARD delete (see DELETE /:id), so there are no soft-deleted
+    // rows to hide — anything still in the collection is a real employee whose
+    // history must be preserved. The Employee Directory frontend buckets them:
+    //   status 'Active'                          → Active tab
+    //   status 'Terminated' | 'Inactive' | 'Resigned' → Resigned tab
+    // Previously this filter dropped Terminated (and any isActive:false) rows,
+    // so a terminated employee vanished from the directory entirely instead of
+    // moving to Resigned. Filtering by status is now the frontend's job.
+    const filter = {};
     if (search) {
       filter.$or = [
         { firstName:  { $regex: search, $options: 'i' } },
@@ -481,6 +490,18 @@ router.put('/:id', async (req, res) => {
     if (payload.role !== undefined) {
       const r = String(payload.role).toLowerCase().trim();
       payload.role = ['employee', 'manager', 'hr', 'admin'].includes(r) ? r : 'employee';
+    }
+
+    // #486 — Keep isActive in lockstep with status so the flag is authoritative
+    // for every consumer (ERM Manager Access reads this SAME `employees` doc as
+    // a User and treats isActive:false / non-Active status as Inactive).
+    //   Active                         → isActive:true
+    //   Terminated | Inactive | Resigned → isActive:false
+    // Only touched when the edit actually changes status, so unrelated edits
+    // (phone, address, etc.) never flip the flag.
+    if (payload.status !== undefined) {
+      const s = String(payload.status).trim();
+      payload.isActive = (s === 'Active');
     }
 
     // If admin entered a new password in the edit form, hash and include
