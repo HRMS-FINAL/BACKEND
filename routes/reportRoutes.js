@@ -170,10 +170,11 @@ router.get('/attendance', async (req, res) => {
         designation:  getDesig(emp.designation),
         manager:      emp.assignedTo || '—',
         status:       emp.status     || 'Active',
-        // Present matches ERM EXACTLY — canonical present (holidays counted
-        // present, late NOT folded in). Late is its own column, as in ERM.
-        present:       c.present,
-        // Chart's disjoint on-time category == canonical present here.
+        // #516 — Present INCLUDES Late days. A late arrival is still a present
+        // day, so the Present column = on-time present + late. Late keeps its
+        // own column for reporting. `presentOnTime` stays the disjoint on-time
+        // count so charts can show on-time vs late without double-counting.
+        present:       c.present + c.late,
         presentOnTime: c.present,
         late:          c.late,
         absent:        c.absent,
