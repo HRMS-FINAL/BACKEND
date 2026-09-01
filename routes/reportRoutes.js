@@ -87,11 +87,19 @@ router.get('/attendance', async (req, res) => {
       return res.status(400).json({ success: false, message: 'startDate and endDate are required (YYYY-MM-DD)' });
     }
 
-    const [employees, depts, desigs] = await Promise.all([
+    const [allEmployees, depts, desigs] = await Promise.all([
       Employee.find({ isActive: { $ne: false } }).lean(),
       Department.find({}).lean(),
       Designation.find({}).lean(),
     ]);
+
+    // #509 — Exclude terminated / resigned / inactive employees from the
+    // Attendance Report entirely. We can't rely on isActive alone: some legacy
+    // terminated rows still carry isActive:true, so we also drop by status.
+    const employees = allEmployees.filter((e) => {
+      const s = String(e.status || '').toLowerCase().trim();
+      return !(e.isActive === false || s === 'terminated' || s === 'resigned' || s === 'inactive');
+    });
 
     const deptMap  = Object.fromEntries(depts.map(d  => [String(d._id), d.name]));
     const desigMap = Object.fromEntries(desigs.map(d => [String(d._id), d.title]));
