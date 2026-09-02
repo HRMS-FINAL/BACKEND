@@ -14,7 +14,8 @@ const announcementSchema = new mongoose.Schema(
       type: String,
       required: [true, 'Announcement description is required'],
       trim: true,
-      minlength: 3,
+      // Allow short messages (e.g. "hi", "ok") — only an empty body is rejected.
+      minlength: 1,
       maxlength: 5000,
     },
     // ─── Mobile-app mirror field (Jun 2026 — #295) ────────────────────
