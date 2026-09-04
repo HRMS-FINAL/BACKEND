@@ -13,6 +13,32 @@ const Announcement = require('../models/Announcement');
 
 const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
 
+// #547 — Company announcements must land as a real SYSTEM push on the ERM
+// mobile app (and any registered browser), not just the in-app bell. HRMS has
+// no Firebase service account, so it asks the mobile backend (which does) to
+// broadcast the push to every registered device. Fire-and-forget — never
+// blocks or fails the announcement create.
+const MOBILE_API   = (process.env.MOBILE_API_URL     || 'https://backend-9rtc.onrender.com').replace(/\/+$/, '');
+const ADMIN_SECRET =  process.env.MOBILE_ADMIN_SECRET || '';
+async function broadcastPushToMobile({ title, body }) {
+  if (!MOBILE_API || !ADMIN_SECRET || typeof fetch !== 'function') return;
+  try {
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    try {
+      const r = await fetch(`${MOBILE_API}/api/notification/admin/broadcast`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', 'x-admin-secret': ADMIN_SECRET },
+        body: JSON.stringify({ title, body, link: '/(tabs)/announcement', type: 'announcement' }),
+        signal: ctrl.signal,
+      });
+      if (!r.ok) console.warn('[announcement] broadcast push responded', r.status);
+    } finally { clearTimeout(timer); }
+  } catch (e) {
+    console.warn('[announcement] broadcast push failed:', e.message);
+  }
+}
+
 // GET /api/announcements — list all active announcements (newest + pinned first)
 router.get('/', async (req, res) => {
   try {
@@ -190,6 +216,17 @@ router.post('/', async (req, res) => {
     // Unified DB: no mirror call. The one local write above is visible to
     // both HRMS and the mobile app because they share the `announcements`
     // collection.
+
+    // #547 — Fan out a real system push to every device for a published,
+    // company-wide announcement. Team/department-scoped ones are skipped.
+    const isPublished = String(announcement.status || 'Published').toLowerCase() === 'published';
+    const isCompanyWide = String(announcement.audience || 'All').toLowerCase() === 'all';
+    if (isPublished && isCompanyWide) {
+      broadcastPushToMobile({
+        title: announcement.title,
+        body:  finalDescription,
+      }).catch(() => {});
+    }
 
     res.status(201).json({
       success: true,
