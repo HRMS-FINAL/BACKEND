@@ -51,6 +51,14 @@ const employeeSchema = new mongoose.Schema(
     employmentType: { type: String, enum: ['Full-time', 'Part-time', 'Contract', 'Intern', ''], default: '' },
     joiningDate:    { type: Date, required: [true, 'Joining date is required'] },
     salary:         { type: Number, required: [true, 'Salary is required'], min: 0 },
+    // Payroll statutory fields. The company does not use PF yet, so these stay
+    // 0 / empty and the payslip shows PF + Professional Tax as 0.00. When PF is
+    // rolled out, HR sets the amounts and the PF A/C Number + UAN per employee,
+    // and they flow straight onto the payslip.
+    pf:               { type: Number, default: 0, min: 0 },   // monthly PF deduction
+    professionalTax:  { type: Number, default: 0, min: 0 },   // monthly Professional Tax
+    pfAccountNumber:  { type: String, default: '', trim: true },
+    uan:              { type: String, default: '', trim: true },
     // assignedTo is OPTIONAL — top-level roles (Managing Director, CEO,
     // executive heads) have no manager above them, and Add Employee
     // needs to accept those rows too.
