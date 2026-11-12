@@ -443,4 +443,33 @@ router.post('/commit-report', express.json({ limit: '2mb' }), async (req, res) =
   res.json({ success: true, generated, total: results.length, results });
 });
 
+// ─────────────────────────────────────────────
+// POST /api/payroll/delete-report
+// JSON: { month, year }
+// Deletes the uploaded report's generated payslips for the month (via the
+// mobile backend), locking that month until a new report is uploaded. Employee
+// master records and other months' payslip history are untouched.
+// ─────────────────────────────────────────────
+router.post('/delete-report', express.json(), async (req, res) => {
+  if (!configReady(res)) return;
+  const m = parseInt(req.body?.month, 10);
+  const y = parseInt(req.body?.year,  10);
+  if (!m || !y) return res.status(400).json({ success: false, message: 'month and year are required.' });
+  try {
+    const r = await fwd('/api/payslip/admin/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ month: m, year: y }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      return res.status(r.status).json({ success: false, message: data?.message || `Mobile API ${r.status}` });
+    }
+    res.json({ success: true, deleted: data.deleted || 0, reopenedRequests: data.reopenedRequests || 0 });
+  } catch (err) {
+    console.error('[payroll/delete-report]', err.message);
+    res.status(502).json({ success: false, message: 'Could not reach the mobile backend. ' + err.message });
+  }
+});
+
 module.exports = router;
