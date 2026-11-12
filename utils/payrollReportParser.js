@@ -249,6 +249,8 @@ function buildEmployeeRow(row, map, index) {
     paidDays: presentDays,
     balAdvance: remaining,
     detail,
+    // raw numerics so the client can recompute on manual assignment
+    raw: { salaryAmount: reportSalary, remaining },
   };
 
   if (!emp) return base;
@@ -320,6 +322,8 @@ function buildLabourRow(row, map, index) {
     paidDays: workingDays,
     balAdvance: 0,
     detail,
+    // raw numerics so the client can recompute on manual assignment
+    raw: { workingDays, perDay, otAmount, totalAmount: reportTotal },
   };
 
   if (!emp) return base;
