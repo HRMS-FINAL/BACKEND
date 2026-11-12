@@ -183,28 +183,32 @@ async function generatePayslipsForMonth({ month, year, employees: ctcOverrides, 
       const lopDays     = Math.max(0, row.absent - row.leave); // unapproved absence
       const perDay      = ctc / daysInMonth;
 
-      const basic   = Math.round(ctc * 0.50);
-      const hra     = Math.round(basic * 0.40);
-      const conv    = 6000;
-      const special = Math.max(0, ctc - basic - hra - conv);
+      // Official Tesco Structures payslip model — ONLY Basic + DA and HRA as
+      // earnings, ONLY PF + Professional Tax as deductions. No Conveyance /
+      // Special / Performance / TDS. Full monthly salary split 50/50 (not
+      // prorated). PF + Professional Tax come from the employee record (0 if
+      // unset). Net = Total Earnings - Total Deductions.
+      const basic = Math.round(ctc / 2);   // Basic + DA
+      const hra   = ctc - basic;           // HRA (keeps basic + hra === ctc)
 
       const earnings = {
         basicSalary:      basic,
         hraAllowance:     hra,
         performanceBonus: 0,
-        otherEarnings:    conv + special,
+        otherEarnings:    0,
       };
-      const totalGross      = basic + hra + conv + special;
-      const lopDeduction    = Math.round(perDay * lopDays);
-      const pf              = Math.round(basic * 0.12);
-      const pt              = 200;
-      const tds             = Math.round(totalGross * 0.10);
+      const totalGross = basic + hra;
+      const pf = Number(emp.pf ?? emp.providentFund ?? 0) || 0;
+      const pt = Number(emp.professionalTax ?? emp.profTax ?? 0) || 0;
+      // NOTE: lopDays above is still computed from attendance (LOP counting is
+      // unchanged), but — matching the official payslip — it is NOT applied as a
+      // monetary deduction, so net = Total Earnings - (PF + Professional Tax).
       const deductions = {
-        incomeTax:       tds,
-        providentFund:   pf,
+        incomeTax:       0,     // no TDS
+        providentFund:   pf,    // PF
         healthInsurance: 0,
-        lopDeduction,
-        otherDeductions: 0,
+        lopDeduction:    0,
+        otherDeductions: pt,    // Professional Tax
       };
 
       const body = {
