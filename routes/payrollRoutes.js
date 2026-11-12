@@ -18,6 +18,7 @@ const XLSX     = (() => { try { return require('xlsx');   } catch { return null;
 const Employee     = require('../models/Employee');
 const Department   = require('../models/Department');
 const Designation  = require('../models/Designation');
+const { parseReport } = require('../utils/payrollReportParser');
 
 const MOBILE_API   = (process.env.MOBILE_API_URL    || 'https://backend-9rtc.onrender.com').replace(/\/+$/, '');
 const ADMIN_SECRET =  process.env.MOBILE_ADMIN_SECRET || '';
@@ -341,5 +342,105 @@ router.post(
     });
   }
 );
+
+// ─────────────────────────────────────────────
+// POST /api/payroll/parse-report
+// Multipart upload of an Employee OR Labour report. Parses the file, auto-
+// detects the format from the header row, matches each row to an existing
+// Employee, computes the per-type payslip numbers + validation flags, and
+// returns a PREVIEW. Nothing is pushed — HR reviews first, then commits.
+// Body/query: month, year, (optional) type = 'employee' | 'labour'
+// ─────────────────────────────────────────────
+router.post(
+  '/parse-report',
+  upload ? upload.single('file') : drainBody,
+  async (req, res) => {
+    const m = parseInt(req.body?.month || req.query?.month, 10);
+    const y = parseInt(req.body?.year  || req.query?.year,  10);
+    if (!m || !y) {
+      return res.status(400).json({ success: false, message: 'month and year are required.' });
+    }
+    if (!multer) {
+      return res.status(503).json({ success: false, message: 'File uploads are disabled on the HRMS server (multer not installed). Run `npm install` in the backend.' });
+    }
+    if (!req.file || !req.file.buffer || !req.file.buffer.length) {
+      return res.status(400).json({ success: false, message: 'No file was received. Please choose an .xlsx or .csv report.' });
+    }
+    const forceType = (req.body?.type || req.query?.type || '').toLowerCase();
+    try {
+      // Pull every employee once for name / employeeId matching.
+      const employees = await Employee.find({}, {
+        firstName: 1, lastName: 1, employeeId: 1, email: 1, salary: 1,
+        pf: 1, professionalTax: 1, departmentName: 1, designationTitle: 1,
+      }).lean();
+
+      const preview = parseReport(req.file.buffer, {
+        employees, month: m, year: y,
+        forceType: (forceType === 'employee' || forceType === 'labour') ? forceType : undefined,
+      });
+      const code = preview.success ? 200 : (preview.unknownFormat ? 422 : 400);
+      return res.status(code).json({
+        ...preview,
+        uploadedFileName: req.file.originalname || null,
+        uploadedSize:     req.file.size || 0,
+      });
+    } catch (err) {
+      console.error('[payroll/parse-report]', err);
+      return res.status(500).json({ success: false, message: 'Failed to parse the report. ' + err.message });
+    }
+  }
+);
+
+// ─────────────────────────────────────────────
+// POST /api/payroll/commit-report
+// JSON: { month, year, reportType, rows: [ { employeeId?, userId?, email?,
+//         earnings, deductions, name? } ] }
+// Pushes each reviewed-and-approved payslip to the mobile backend. The rows
+// are exactly the `push` objects returned by /parse-report, so preview,
+// downloaded PDF and stored record all carry identical values.
+// ─────────────────────────────────────────────
+router.post('/commit-report', express.json({ limit: '2mb' }), async (req, res) => {
+  if (!configReady(res)) return;
+  const m = parseInt(req.body?.month, 10);
+  const y = parseInt(req.body?.year,  10);
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+  if (!m || !y) return res.status(400).json({ success: false, message: 'month and year are required.' });
+  if (!rows.length) return res.status(400).json({ success: false, message: 'No payslip rows to commit.' });
+
+  const monthLabel = `${MONTH_NAMES[m]} ${y}`;
+  const results = [];
+  for (const row of rows) {
+    if (!row || (!row.employeeId && !row.userId && !row.email)) {
+      results.push({ name: row?.name || '(unknown)', ok: false, message: 'row has no employee identifier' });
+      continue;
+    }
+    const body = {
+      employeeId: row.employeeId || undefined,
+      userId:     row.userId     || undefined,
+      email:      row.email      || undefined,
+      month: m, year: y, monthLabel,
+      earnings:   row.earnings   || {},
+      deductions: row.deductions || {},
+    };
+    try {
+      const r = await fwd('/api/payslip/admin/upsert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      });
+      const d = await r.json().catch(() => ({}));
+      results.push({
+        employeeId: row.employeeId, name: row.name, ok: r.ok,
+        netPay: d?.payslip?.netPay,
+        message: r.ok ? 'ok' : (d?.message || `mobile ${r.status}`),
+      });
+    } catch (e) {
+      results.push({ employeeId: row.employeeId, name: row.name, ok: false, message: e.message });
+    }
+  }
+
+  const generated = results.filter(r => r.ok).length;
+  res.json({ success: true, generated, total: results.length, results });
+});
 
 module.exports = router;
